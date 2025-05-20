@@ -4,6 +4,7 @@ import { useEffect, useState } from "react"
 import { useSearchParams } from "next/navigation"
 import MindMap from "@/components/mind-map"
 
+// @ts-ignore
 export default function MindMapPage({ params }: { params: { id: string } }) {
   const searchParams = useSearchParams()
   const nodeId = searchParams.get("nodeId")
