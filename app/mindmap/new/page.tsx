@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect } from "react"
+import { useEffect, Suspense } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import MindMap from "@/components/mind-map"
 
@@ -63,8 +63,8 @@ const newMindMapData: GraphData = {
   ]
 }
 
-export default function NewMindMapPage() {
-  const router = useRouter()
+// New component to handle dynamic rendering
+function MindMapRenderer() {
   const searchParams = useSearchParams()
   const type = searchParams.get("type")
 
@@ -74,9 +74,17 @@ export default function NewMindMapPage() {
 
   const initialData = type === "quick-note" ? quickNoteData : newMindMapData
 
+  return <MindMap initialGraphDataFromFolder={initialData} />
+}
+
+export default function NewMindMapPage() {
+  const router = useRouter() // router is not used, can be removed if not needed elsewhere
+
   return (
     <main className="w-screen h-screen min-h-0 min-w-0 overflow-hidden">
-      <MindMap initialData={initialData} />
+      <Suspense fallback={<div className="w-full h-full flex items-center justify-center text-white">Loading Mind Map...</div>}>
+        <MindMapRenderer />
+      </Suspense>
     </main>
   )
 } 
