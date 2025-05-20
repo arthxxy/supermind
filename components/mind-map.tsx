@@ -42,6 +42,8 @@ interface GraphData {
 // Props for the MindMap component
 interface MindMapProps {
   initialGraphDataFromFolder?: GraphData; // Optional prop for folder-generated data
+  initialNodeId?: string | null; // Add this prop
+  mapId?: string; // Add this prop (or ensure it's there if it was planned)
   // We can add other props here if needed, e.g., a key to force re-render on data change
 }
 
