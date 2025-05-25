@@ -5,32 +5,17 @@
 /.pnp
 .pnp.js
 
-# Testing
-/coverage
-
-# Next.js build output
+# Build, Output & Framework-specific
 /.next/
 /out/
-
-# Production
 /build
+.turbo
+.vercel
+*.tsbuildinfo
+next-env.d.ts
 
-# Neustore
-/.idea
-/.vs
-/.vscode/*
-!.vscode/settings.json
-!.vscode/tasks.json
-!.vscode/launch.json
-!.vscode/extensions.json
-
-# Misc
-.DS_Store
-*.pem
-
-# Local Environment Variables
-.env.local
-.env.*.local
+# Testing
+/coverage
 
 # Log files
 npm-debug.log*
@@ -38,31 +23,34 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-# Editor directories and files
-.idea
-.vscode
+# Local Environment Variables
+.env.local
+.env.*.local
+
+# IDE / Editor Configuration
+# General IDE/Editor specific files
+/.idea
+/.vs
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
+# VSCode specific
+/.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
 
-# System files
-Thumbs.db
-ehthumbs.db
-Desktop.ini
-
-# Optional Husky
+# Git Hooks (Husky)
 .husky/_/husky.sh
 .husky/_/.gitignore
 .husky/_/*
 
-# Turborepo
-.turbo
-
-# vercel
-.vercel
-
-# typescript
-*.tsbuildinfo
-next-env.d.ts
+# OS-specific / Miscellaneous
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+*.pem

@@ -11,6 +11,7 @@ import { MarkdownEditor } from "@/components/markdown-editor"
 const BASE_SVG_FONT_SIZE = 12; // The actual font size set on SVG <text> elements
 const FULLY_OPAQUE_EFFECTIVE_SIZE = 10;   // Effective px size. Above this: Opacity 1
 const INVISIBLE_EFFECTIVE_SIZE = 7;        // Effective px size. Below this: Opacity 0.
+const OTHER_NODE_TEXT_OPACITY_ON_HOVER = 0.2; // New constant for dimmed text
 
 interface Relationship {
   type: "friend" | "child" | "parent";
@@ -72,6 +73,205 @@ const initialData: GraphData = {
   ],
 }
 
+// Custom force for distributing sibling nodes
+function createSiblingDistributionForce(
+  initialNodes: Node[], 
+  initialLinks: Link[], 
+  strengthVal: number, 
+  idealLinkDistanceVal: number
+): d3.Force<Node, Link> { 
+  let nodes: Node[];
+  let links: Link[]; // All links
+  let parentChildLinks: Link[]; // Filtered parent-child links
+  let nodesMap: Map<string, Node>;
+  let strength = strengthVal;
+  let idealLinkDistance = idealLinkDistanceVal;
+
+  function force(alpha: number) {
+    if (!nodes || !parentChildLinks || !nodesMap) return;
+
+    const childrenByParent = new Map<string, Node[]>();
+    parentChildLinks.forEach(link => {
+      const sourceId = typeof link.source === 'string' ? link.source : (link.source as Node).id;
+      const targetNode = typeof link.target === 'string' ? nodesMap.get(link.target) : link.target as Node;
+      if (targetNode) {
+        if (!childrenByParent.has(sourceId)) {
+          childrenByParent.set(sourceId, []);
+        }
+        childrenByParent.get(sourceId)!.push(targetNode);
+      }
+    });
+
+    childrenByParent.forEach((children, parentId) => {
+      const parentNode = nodesMap.get(parentId);
+      if (!parentNode || children.length <= 1 || parentNode.x === undefined || parentNode.y === undefined) {
+        return;
+      }
+
+      const angleStep = (2 * Math.PI) / children.length;
+
+      children.forEach((child, i) => {
+        if (child.x === undefined || child.y === undefined) {
+          child.x = parentNode.x! + (Math.random() - 0.5) * 0.1; // Small random offset
+          child.y = parentNode.y! + (Math.random() - 0.5) * 0.1; // Small random offset
+        }
+
+        const targetX = parentNode.x! + idealLinkDistance * Math.cos(i * angleStep);
+        const targetY = parentNode.y! + idealLinkDistance * Math.sin(i * angleStep);
+
+        child.vx = (child.vx || 0) + (targetX - child.x!) * strength * alpha;
+        child.vy = (child.vy || 0) + (targetY - child.y!) * strength * alpha;
+      });
+    });
+  }
+
+  force.initialize = (_nodes: Node[], random?: () => number) => {
+    nodes = _nodes;
+    nodesMap = new Map(nodes.map(n => [n.id, n]));
+    // Links are already initialized from the constructor scope
+  };
+  
+  force.strength = function(_strength?: number) {
+    if (_strength === undefined) return strength;
+    strength = _strength;
+    return force;
+  };
+
+  force.links = function(_links?: Link[]) {
+    if (_links === undefined) return links; // Return all links
+    links = _links;
+    parentChildLinks = links.filter(link => link.type === 'parent-child');
+    return force;
+  };
+  
+  force.nodes = function(_nodes?: Node[]) {
+    if (_nodes === undefined) return nodes;
+    nodes = _nodes;
+    nodesMap = new Map(nodes.map(n => [n.id, n]));
+    return force;
+  };
+
+  force.distance = function(_distance?: number) {
+    if (_distance === undefined) return idealLinkDistance;
+    idealLinkDistance = _distance;
+    return force;
+  };
+
+  // Initialize internal links arrays during creation
+  links = initialLinks;
+  parentChildLinks = initialLinks.filter(link => link.type === 'parent-child');
+  // nodes will be set by D3 via initialize, but we can also set nodesMap early if initialNodes are passed
+  if (initialNodes) {
+    nodes = initialNodes;
+    nodesMap = new Map(initialNodes.map(n => [n.id, n]));
+  }
+
+  return force;
+}
+
+// Helper function to find connected components (subgraphs)
+function findConnectedComponents(nodes: Node[], links: Link[]): Node[][] {
+  const visited = new Set<string>();
+  const components: Node[][] = [];
+  const adj = new Map<string, string[]>();
+
+  nodes.forEach(node => adj.set(node.id, []));
+  links.forEach(link => {
+    const sourceId = typeof link.source === 'string' ? link.source : (link.source as Node).id;
+    const targetId = typeof link.target === 'string' ? link.target : (link.target as Node).id;
+    adj.get(sourceId)?.push(targetId);
+    adj.get(targetId)?.push(sourceId);
+  });
+
+  function dfs(nodeId: string, currentComponent: Node[]) {
+    visited.add(nodeId);
+    const node = nodes.find(n => n.id === nodeId);
+    if (node) {
+      currentComponent.push(node);
+    }
+    adj.get(nodeId)?.forEach(neighborId => {
+      if (!visited.has(neighborId)) {
+        dfs(neighborId, currentComponent);
+      }
+    });
+  }
+
+  nodes.forEach(node => {
+    if (!visited.has(node.id)) {
+      const currentComponent: Node[] = [];
+      dfs(node.id, currentComponent);
+      if (currentComponent.length > 0) {
+        components.push(currentComponent);
+      }
+    }
+  });
+
+  return components;
+}
+
+// Helper function to recalculate levels within a component
+function recalculateLevelsInComponent(
+  componentNodeIds: Set<string>,
+  allNodes: Node[],
+  allLinks: Link[]
+): Map<string, number> {
+  const newLevels = new Map<string, number>();
+  const nodesInComponent = allNodes.filter(n => componentNodeIds.has(n.id));
+  const linksInOrToComponent = allLinks.filter(l => {
+    const sourceId = typeof l.source === 'string' ? l.source : (l.source as Node).id;
+    const targetId = typeof l.target === 'string' ? l.target : (l.target as Node).id;
+    return componentNodeIds.has(sourceId) || componentNodeIds.has(targetId);
+  });
+
+  const adj = new Map<string, string[]>(); // Child to parents within component
+  const childrenMap = new Map<string, string[]>(); // Parent to children within component
+  nodesInComponent.forEach(n => {
+    adj.set(n.id, []);
+    childrenMap.set(n.id, []);
+  });
+
+  const componentRoots = new Set<string>(nodesInComponent.map(n => n.id));
+
+  linksInOrToComponent.forEach(link => {
+    if (link.type === 'parent-child') {
+      const sourceId = typeof link.source === 'string' ? link.source : (link.source as Node).id;
+      const targetId = typeof link.target === 'string' ? link.target : (link.target as Node).id;
+      // Only consider links where both ends are in the component for parent-child relationships
+      if (componentNodeIds.has(sourceId) && componentNodeIds.has(targetId)) {
+        adj.get(targetId)?.push(sourceId); // targetId has parent sourceId
+        childrenMap.get(sourceId)?.push(targetId); // sourceId has child targetId
+        componentRoots.delete(targetId); // Node with a parent in the component is not a root
+      }
+    }
+  });
+
+  const queue: { nodeId: string; level: number }[] = [];
+  componentRoots.forEach(rootId => {
+    queue.push({ nodeId: rootId, level: 0 });
+    newLevels.set(rootId, 0);
+  });
+
+  let head = 0;
+  while (head < queue.length) {
+    const { nodeId, level } = queue[head++];
+    const children = childrenMap.get(nodeId) || [];
+    for (const childId of children) {
+      if (!newLevels.has(childId)) { // Avoid cycles and re-processing
+        newLevels.set(childId, level + 1);
+        queue.push({ nodeId: childId, level: level + 1 });
+      }
+    }
+  }
+  // Ensure all nodes in component get a level, even if disconnected somehow (assign high level)
+  nodesInComponent.forEach(node => {
+    if (!newLevels.has(node.id)) {
+      newLevels.set(node.id, 99); // Fallback for orphaned nodes within the conceptual component
+    }
+  });
+
+  return newLevels;
+}
+
 export default function MindMap({ initialGraphDataFromFolder }: MindMapProps) {
   const [graphData, setGraphData] = useState<GraphData>(
     initialGraphDataFromFolder || initialData // Prioritize folder data if available
@@ -79,9 +279,49 @@ export default function MindMap({ initialGraphDataFromFolder }: MindMapProps) {
   const [selectedNode, setSelectedNode] = useState<Node | null>(null)
   const [editingNode, setEditingNode] = useState<Node | null>(null)
   const [toolbarPosition, setToolbarPosition] = useState({ x: 0, y: 0 })
+  const [intraGraphCompactness, setIntraGraphCompactness] = useState<number>(5); // Default 5 (range 0-10)
+  const [interGraphCompactness, setInterGraphCompactness] = useState<number>(10); // Default 10 (very close for inter-graph)
+  const [showSettings, setShowSettings] = useState<boolean>(false);
+  const [enableHoverEffects, setEnableHoverEffects] = useState<boolean>(true); // On by default
+  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
+  const [isZooming, setIsZooming] = useState<boolean>(false); // Re-add isZooming state
   const svgRef = useRef<SVGSVGElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const simulationRef = useRef<d3.Simulation<Node, Link> | null>(null)
+
+  // Refs for D3 selections - using 'any' for the last generic type argument as a workaround for complex D3 types
+  const nodeSelectionRef = useRef<d3.Selection<SVGGElement, Node, SVGGElement, any> | null>(null);
+  const linkSelectionRef = useRef<d3.Selection<SVGLineElement, Link, SVGGElement, any> | null>(null);
+  const textSelectionRef = useRef<d3.Selection<SVGTextElement, Node, SVGGElement, any> | null>(null);
+
+  // Calculate an internal scaling factor based on intraGraphCompactness
+  const normalizedIntraGCompact = intraGraphCompactness / 10; // Normalize 0-10 to 0-1
+  const MAX_INTERNAL_SCALE = 2.0; // Corresponds to intraGraphCompactness = 0 (wide)
+  const MIN_INTERNAL_SCALE = 0.5; // Corresponds to intraGraphCompactness = 10 (compact)
+  const internalScale = MAX_INTERNAL_SCALE - normalizedIntraGCompact * (MAX_INTERNAL_SCALE - MIN_INTERNAL_SCALE);
+
+  // Adjusted base values for stronger hierarchy
+  const baseParentChildLinkDist = 60 * internalScale; // Adjusted slightly
+  const baseFriendLinkDist = 100 * internalScale;
+  const baseMultiCompRadialLevelMultiplier = 100 * internalScale; // Increased for more level separation
+  const baseMultiCompRadialBaseOffset = 20 * internalScale;    // Decreased to bring roots closer to center
+  const baseSingleCompRadialLevelMultiplier = 110 * internalScale; // Increased
+  const baseSingleCompRadialBaseOffset = 30 * internalScale;     // Decreased
+  const baseManyBodyStrength = -700 * internalScale;
+  const baseCollideRadius = 25 * internalScale; // Slightly smaller to allow tighter packing if hierarchy dictates
+  const baseSiblingDistForceIdealLinkDistance = 60 * internalScale;
+
+  // Scaled values
+  const scaledParentChildLinkDist = baseParentChildLinkDist;
+  const scaledFriendLinkDist = baseFriendLinkDist;
+  const scaledMultiCompRadialLevelMultiplier = baseMultiCompRadialLevelMultiplier;
+  const scaledMultiCompRadialBaseOffset = baseMultiCompRadialBaseOffset;
+  const scaledSingleCompRadialLevelMultiplier = baseSingleCompRadialLevelMultiplier;
+  const scaledSingleCompRadialBaseOffset = baseSingleCompRadialBaseOffset;
+  const scaledManyBodyStrength = baseManyBodyStrength;
+  const scaledCollideRadius = baseCollideRadius;
+  const scaledSiblingDistForceIdealLinkDistance = baseSiblingDistForceIdealLinkDistance;
+  const fixedHighlightedFontSize = 16; // For hovered text
 
   // Effect to update graphData if initialGraphDataFromFolder changes
   useEffect(() => {
@@ -185,51 +425,82 @@ export default function MindMap({ initialGraphDataFromFolder }: MindMapProps) {
     setEditingNode(null)
   }
 
-  // Function to add a relationship
+  // Function to add a relationship (simplified/reverted)
   const addRelationship = (sourceId: string, command: string, targetName: string) => {
-    const targetNode = graphData.nodes.find(node => node.name === targetName)
+    const sourceNode = graphData.nodes.find(node => node.id === sourceId);
+    let targetNode = graphData.nodes.find(node => node.name === targetName);
+
+    if (!sourceNode) return;
+
+    let newNodes = [...graphData.nodes];
+    let newLinks = [...graphData.links];
+    let createdNewNode = false;
+    let newTargetNodeId = targetNode?.id;
+
     if (!targetNode) {
-      // Create new node if it doesn't exist
-      const newNodeId = `node-${Date.now()}`
-      const sourceNode = graphData.nodes.find(node => node.id === sourceId)
-      if (!sourceNode) return
-
-      const newLevel = command === '>' ? sourceNode.level + 1 : 
-                      command === '<' ? sourceNode.level - 1 : 
-                      sourceNode.level
-      const colors = ["#ff6b6b", "#48dbfb", "#1dd1a1", "#feca57", "#54a0ff"]
-
-      const newNode: Node = {
-        id: newNodeId,
+      newTargetNodeId = `node-${Date.now()}`;
+      const colors = ["#ff6b6b", "#48dbfb", "#1dd1a1", "#feca57", "#54a0ff"];
+      // Tentative level for new node, will be corrected by recalculateLevelsInComponent
+      let newLevel = sourceNode.level;
+      if (command === '>') newLevel = sourceNode.level + 1;
+      else if (command === '<') newLevel = Math.max(0, sourceNode.level - 1);
+      
+      const newNodeToAdd: Node = {
+        id: newTargetNodeId,
         name: targetName,
-        level: Math.max(0, newLevel),
+        level: Math.max(0, newLevel), // Initial rough level
         color: colors[Math.max(0, newLevel) % colors.length],
-      }
-
-      const newLink: Link = {
-        source: command === '<' ? newNodeId : sourceId,
-        target: command === '<' ? sourceId : newNodeId,
-        type: command === '=' ? "friend" : "parent-child"
-      }
-
-      setGraphData(prev => ({
-        nodes: [...prev.nodes, newNode],
-        links: [...prev.links, newLink]
-      }))
-    } else {
-      // Add link between existing nodes
-      const newLink: Link = {
-        source: command === '<' ? targetNode.id : sourceId,
-        target: command === '<' ? sourceId : targetNode.id,
-        type: command === '=' ? "friend" : "parent-child"
-      }
-
-      setGraphData(prev => ({
-        ...prev,
-        links: [...prev.links, newLink]
-      }))
+      };
+      newNodes.push(newNodeToAdd);
+      targetNode = newNodeToAdd; // Use the newly created node object
+      createdNewNode = true;
     }
-  }
+
+    const newLink: Link = {
+      source: command === '<' ? newTargetNodeId! : sourceId,
+      target: command === '<' ? sourceId : newTargetNodeId!,
+      type: command === '=' ? "friend" : "parent-child"
+    };
+    newLinks.push(newLink);
+
+    // If a parent-child link was added, or a new node that will form one, recalculate levels for the component.
+    if (newLink.type === 'parent-child' || createdNewNode) {
+      // Find all components with the current set of nodes and the new link temporarily added for component finding
+      const tempLinksForComponentFinding = [...graphData.links, newLink];
+      const allComponents = findConnectedComponents(newNodes, tempLinksForComponentFinding);
+      
+      const affectedNodeIds = new Set<string>([sourceId, newTargetNodeId!]);
+      let targetComponentNodeIds: Set<string> | null = null;
+
+      for (const comp of allComponents) {
+        const compIds = new Set(comp.map(n => n.id));
+        if (compIds.has(sourceId) || compIds.has(newTargetNodeId!)) {
+          targetComponentNodeIds = compIds;
+          break;
+        }
+      }
+
+      if (targetComponentNodeIds) {
+        const newLevelsMap = recalculateLevelsInComponent(targetComponentNodeIds, newNodes, newLinks);
+        newNodes = newNodes.map(n => {
+          if (newLevelsMap.has(n.id)) {
+            const newLvl = newLevelsMap.get(n.id)!;
+            return { 
+              ...n, 
+              level: newLvl,
+              color: n.color // Keep color for now, or re-assign based on newLvl if desired
+            };
+          }
+          return n;
+        });
+      }
+    }
+
+    setGraphData({
+      nodes: newNodes,
+      links: newLinks
+    });
+  };
 
   // Function to update a relationship
   const updateRelationship = (nodeId: string, oldType: string, newCommand: string, targetName: string) => {
@@ -349,7 +620,7 @@ export default function MindMap({ initialGraphDataFromFolder }: MindMapProps) {
         simulationRef.current.force("link", d3.forceLink<Node, Link>(updatedLinks)
           .id((d) => d.id)
           .distance((link) => link.type === "friend" ? 100 : 60)
-          .strength((link) => link.type === "friend" ? 0.1 : 0.8)
+          .strength((link) => link.type === "friend" ? 0.1 : 0.7)
         );
 
         // Restart with a very low alpha to minimize movement
@@ -422,7 +693,7 @@ export default function MindMap({ initialGraphDataFromFolder }: MindMapProps) {
         simulationRef.current.force("link", d3.forceLink<Node, Link>(updatedLinks)
           .id((d) => d.id)
           .distance((link) => link.type === "friend" ? 100 : 60)
-          .strength((link) => link.type === "friend" ? 0.1 : 0.8)
+          .strength((link) => link.type === "friend" ? 0.1 : 0.7)
         );
 
         // Restart with a very low alpha to minimize movement
@@ -463,176 +734,302 @@ export default function MindMap({ initialGraphDataFromFolder }: MindMapProps) {
     setSelectedNode(null)
   }
 
-  // Initialize and update the D3 visualization
+  // Main D3 setup effect
   useEffect(() => {
-    if (!svgRef.current || !containerRef.current) return
+    if (!svgRef.current || !containerRef.current) return;
 
-    const width = containerRef.current.clientWidth
-    const height = containerRef.current.clientHeight
-    const svg = d3.select(svgRef.current)
+    const width = containerRef.current.clientWidth;
+    const height = containerRef.current.clientHeight;
+    const svg = d3.select(svgRef.current);
+    svg.selectAll("*").remove();
+    const g = svg.append("g");
 
-    // Clear previous content
-    svg.selectAll("*").remove() // Clear all, including defs from previous renders
+    // Ensure links reference the current node instances from graphData.nodes
+    const currentNodesMap = new Map(graphData.nodes.map(n => [n.id, n]));
+    const processedLinks = graphData.links.map(l => {
+        const sourceId = typeof l.source === 'string' ? l.source : (l.source as Node).id;
+        const targetId = typeof l.target === 'string' ? l.target : (l.target as Node).id;
+        const sourceNode = currentNodesMap.get(sourceId);
+        const targetNode = currentNodesMap.get(targetId);
 
-    // No SVG filter needed for blurring anymore
-
-    // Create the main group for the graph
-    const g = svg.append("g")
-
-    // Create zoom behavior
-    const zoom = d3
-      .zoom<SVGSVGElement, unknown>()
-      .scaleExtent([0.1, 4])
-      .on("zoom", (event) => {
-        g.attr("transform", event.transform) // Apply zoom to the main graph group
-
-        const currentScale = event.transform.k;
-        const effectiveFontSize = BASE_SVG_FONT_SIZE * currentScale;
-
-        let targetOpacity = 1.0;
-
-        if (effectiveFontSize >= FULLY_OPAQUE_EFFECTIVE_SIZE) {
-          targetOpacity = 1.0;
-        } else if (effectiveFontSize <= INVISIBLE_EFFECTIVE_SIZE) {
-          targetOpacity = 0;
-        } else {
-          // Linearly interpolate opacity between INVISIBLE_EFFECTIVE_SIZE and FULLY_OPAQUE_EFFECTIVE_SIZE
-          targetOpacity = d3.scaleLinear()
-            .domain([INVISIBLE_EFFECTIVE_SIZE, FULLY_OPAQUE_EFFECTIVE_SIZE])
-            .range([0, 1.0])
-            .clamp(true)(effectiveFontSize);
+        if (!sourceNode || !targetNode) {
+            console.warn("Orphaned link detected during processing, skipping: ", l, "Source ID:", sourceId, "Target ID:", targetId);
+            return null; 
         }
+        return {
+            ...l,
+            source: sourceNode, // Explicitly use the node object from the current graphData.nodes
+            target: targetNode  // Explicitly use the node object from the current graphData.nodes
+        };
+    }).filter(l => l !== null) as Link[];
 
-        // Apply opacity to all text labels
-        g.selectAll<SVGTextElement, Node>(".node text")
-          .style("opacity", targetOpacity)
-          // .attr("filter", null); // Ensure no filter is applied if it was set previously by mistake
-      })
+    const components = findConnectedComponents(graphData.nodes, processedLinks);
+    const nodeToComponentIndex = new Map<string, number>();
+    const potentialRootNodeIds = new Set<string>();
+    components.forEach((comp, idx) => {
+      let minLevel = Infinity;
+      comp.forEach(node => {
+        nodeToComponentIndex.set(node.id, idx);
+        if (node.level < minLevel) minLevel = node.level;
+      });
+      comp.forEach(node => { if (node.level === minLevel) potentialRootNodeIds.add(node.id); });
+    });
 
-    svg.call(zoom)
-    svg.on("click", handleBackgroundClick)
+    const finalRootNodeIds = new Set<string>();
+    potentialRootNodeIds.forEach(nodeId => {
+      let isTrueDisplayRoot = true;
+      for (const link of processedLinks) {
+        const linkTarget = link.target as Node;
+        const linkSource = link.source as Node;
 
-    // Center the view initially
-    svg.call(zoom.transform, d3.zoomIdentity.translate(width / 2, height / 2))
+        if (linkTarget.id === nodeId && link.type === 'parent-child') {
+          if (potentialRootNodeIds.has(linkSource.id) && linkSource.level === linkTarget.level) {
+            isTrueDisplayRoot = false;
+            break;
+          }
+        }
+      }
+      if (isTrueDisplayRoot) finalRootNodeIds.add(nodeId);
+    });
 
-    // Create the simulation
     const simulation = d3
-      .forceSimulation<Node, Link>(graphData.nodes)
+      .forceSimulation<Node, Link>(graphData.nodes) 
       .force(
         "link",
-        d3
-          .forceLink<Node, Link>(graphData.links)
+        d3.forceLink<Node, Link>(processedLinks)
           .id((d) => d.id)
-          .distance((link) => (link.type === "friend" ? 100 : 60))
-          .strength((link) => (link.type === "friend" ? 0.1 : 0.8)),
+          .distance((link) => (link.type === "friend" ? scaledFriendLinkDist : scaledParentChildLinkDist))
+          .strength((link) => (link.type === "friend" ? 0.2 : 0.9))
       )
-      .force("charge", d3.forceManyBody().strength(-300))
-      .force("center", d3.forceCenter(0, 0))
-      .force("radial", d3.forceRadial<Node>((d) => 100 * d.level, 0, 0).strength(0.8))
+      .force("charge", d3.forceManyBody().strength(scaledManyBodyStrength))
+      .force("collide", d3.forceCollide().radius(scaledCollideRadius).strength(0.8));
 
-    simulationRef.current = simulation
+    if (components.length > 0) {
+      if (components.length > 1) {
+        const numComponents = components.length;
+        const effectiveInterGraphDivisor = Math.max(1, interGraphCompactness);
+        const interGraphSpacingDivisor = effectiveInterGraphDivisor * 2;
+        const componentAnchorRadius = (Math.min(width, height) / interGraphSpacingDivisor) * (Math.log(numComponents + 1) || 1);
+        const componentAnchors = components.map((_, i) => {
+          const angle = (2 * Math.PI / components.length) * i;
+          return { x: componentAnchorRadius * Math.cos(angle), y: componentAnchorRadius * Math.sin(angle) };
+        });
 
-    // Create the links
-    const link = g
-      .append("g")
-      .attr("stroke", "#999")
-      .attr("stroke-opacity", 0.6)
-      .selectAll("line")
-      .data(graphData.links)
+        components.forEach((_componentNodes, i) => {
+          const anchorX = componentAnchors[i].x;
+          const anchorY = componentAnchors[i].y;
+          simulation.force(`anchorX-${i}`, d3.forceX<Node>(anchorX).strength(d => nodeToComponentIndex.get(d.id) === i ? 0.08 : 0));
+          simulation.force(`anchorY-${i}`, d3.forceY<Node>(anchorY).strength(d => nodeToComponentIndex.get(d.id) === i ? 0.08 : 0));
+          simulation.force(`radial-${i}`, d3.forceRadial<Node>(
+            (d) => (d.level * scaledMultiCompRadialLevelMultiplier) + scaledMultiCompRadialBaseOffset,
+            anchorX, anchorY
+          ).strength(d => nodeToComponentIndex.get(d.id) === i ? 0.95 : 0));
+        });
+      } else { // Single component
+        simulation.force("center", d3.forceCenter(0, 0).strength(0.05));
+        simulation.force("radial-0", d3.forceRadial<Node>(
+          (d) => (d.level * scaledSingleCompRadialLevelMultiplier) + scaledSingleCompRadialBaseOffset, 0, 0)
+          .strength(0.95));
+      }
+    }
+    
+    if (graphData.nodes.length > 0 && processedLinks.filter(l => l.type === 'parent-child').length > 0) {
+       simulation.force("siblingDistribution", createSiblingDistributionForce(graphData.nodes, processedLinks, 0.7, scaledSiblingDistForceIdealLinkDistance));
+    }
+
+    simulationRef.current = simulation;
+
+    const linkElements = g.append("g").attr("stroke", "#999").attr("stroke-opacity", 0.6)
+      .selectAll<SVGLineElement, Link>("line")
+      .data(processedLinks)
       .join("line")
-      .attr("stroke-width", (d) => (d.type === "parent-child" ? 2 : 1))
-      .attr("stroke-dasharray", (d) => (d.type === "friend" ? "5,5" : null))
+      .attr("stroke-width", (d: Link) => d.type === "parent-child" ? 2 : 1)
+      .attr("stroke-dasharray", (d: Link) => d.type === "friend" ? "5,5" : null)
+      .attr("marker-start", (d: Link) => d.type === "parent-child" ? "url(#triangle-default)" : null);
+    linkSelectionRef.current = linkElements;
 
-    // Add isosceles triangle for parent-child links (thinner version)
-    svg
-      .append("defs")
-      .append("marker")
-      .attr("id", "triangle")
-      // viewBox: min-x, min-y, width, height. Path M0,-1.5 L16,0 L0,1.5Z.
-      .attr("viewBox", "0 -1.5 16 3")
-      // refX=0: Aligns marker's (0,0) (base of our path) with parent node center.
+    const defs = svg.append("defs");
+    
+    defs.append("marker")
+      .attr("id", "triangle-default")
+      .attr("viewBox", "0 -2.025 16 4.05")
       .attr("refX", 0)
       .attr("refY", 0)
-      // orient="auto": For marker-start, orients marker's +X axis along the line (parent to child).
       .attr("orient", "auto")
-      // markerWidth/Height: Match viewBox for no scaling.
       .attr("markerWidth", 16)
-      .attr("markerHeight", 3)
+      .attr("markerHeight", 4.05)
       .append("path")
-      // Thinner isosceles triangle path: Base at x=0 (width 3), Tip at x=16.
-      // Node (radius 8) covers x=0 to x=8. Visible tip from x=8 to x=16 (length 8).
-      .attr("d", "M0,-1.5L16,0L0,1.5Z")
-      .attr("fill", "#999")
+      .attr("d", "M0,-2.025L16,0L0,2.025Z")
+      .attr("fill", "#999");
 
-    // Apply triangles to parent-child links
-    link.filter((d) => d.type === "parent-child")
-      .attr("marker-start", "url(#triangle)")
+    defs.append("marker")
+      .attr("id", "triangle-purple")
+      .attr("viewBox", "0 -2.025 16 4.05")
+      .attr("refX", 0)
+      .attr("refY", 0)
+      .attr("orient", "auto")
+      .attr("markerWidth", 16)
+      .attr("markerHeight", 4.05)
+      .append("path")
+      .attr("d", "M0,-2.025L16,0L0,2.025Z")
+      .attr("fill", "purple");
 
-    // Create node groups
-    const node = g
+    const nodeElements = g
       .append("g")
       .selectAll<SVGGElement, Node>(".node")
       .data(graphData.nodes)
       .join("g")
       .attr("class", "node")
-      .on("click", (event, d) => {
-        handleNodeClick(d, event)
-      })
-      .on("dblclick", (event, d) => {
-        handleNodeDoubleClick(d, event)
-      })
-      .call(
-        d3.drag<SVGGElement, Node>()
-          .on("start", (event, d) => {
-            if (!event.active) simulation.alphaTarget(0.3).restart()
-            d.fx = d.x
-            d.fy = d.y
-          })
-          .on("drag", (event, d) => {
-            d.fx = event.x
-            d.fy = event.y
-          })
-          .on("end", (event, d) => {
-            if (!event.active) simulation.alphaTarget(0)
-            d.fx = null
-            d.fy = null
-          }) as any
+      .call(d3.drag<SVGGElement, Node>()
+        .on("start", (event, d: Node) => {
+          if (!event.active) simulationRef.current?.alphaTarget(0.3).restart();
+          d.fx = d.x ?? 0;
+          d.fy = d.y ?? 0;
+        })
+        .on("drag", (event, d: Node) => {
+          d.fx = event.x;
+          d.fy = event.y;
+        })
+        .on("end", (event, d: Node) => {
+          if (!event.active) simulationRef.current?.alphaTarget(0);
+          d.fx = null; 
+          d.fy = null; 
+        })
       )
+      .on("click", (event, d_clk: Node) => { handleNodeClick(d_clk, event); })
+      .on("dblclick", (event, d_dblclk: Node) => { handleNodeDoubleClick(d_dblclk, event); })
+      .on("pointerover", function(event, hovered_d: Node) {
+        event.stopPropagation();
+        if (enableHoverEffects) {
+          if (hoveredNodeId !== hovered_d.id) {
+            setHoveredNodeId(hovered_d.id);
+          }
+        }
+      })
+      .on("pointerout", function(event, d_out: Node) {
+        event.stopPropagation();
+        if (enableHoverEffects && !isZooming) {
+          setHoveredNodeId(null);
+        }
+      });
+    nodeSelectionRef.current = nodeElements;
 
-    // Add circles to nodes
-    node
-      .append("circle")
-      .attr("r", 8)
-      .attr("fill", (d) => d.color || "#999")
-
-    // Add text labels
-    node
-      .append("text")
-      .attr("dx", 0)
-      .attr("dy", 20)
-      .attr("text-anchor", "middle")
-      .text((d) => d.name)
-      .attr("fill", "white")
-      .attr("font-size", `${BASE_SVG_FONT_SIZE}px`) // Use constant here
+    nodeElements.append("circle").attr("r", 11).attr("class", "node-base")
+                 .attr("fill", (d_node: Node) => finalRootNodeIds.has(d_node.id) ? "white" : "transparent");
+    nodeElements.append("circle").attr("r", 8).attr("fill", (d_node: Node) => d_node.color || "#999");
+    
+    const textElements = nodeElements.append("text")
+      .attr("dx", 0).attr("dy", 20).attr("text-anchor", "middle")
+      .text((d: Node) => d.name).attr("fill", "white")
       .attr("font-family", "sans-serif")
+      .attr("font-size", `${BASE_SVG_FONT_SIZE}px`);
+    textSelectionRef.current = textElements;
 
-    // Update positions on each tick
+    const findNodeUnderMouse = (event: any, transform: d3.ZoomTransform): string | null => {
+      if (!svgRef.current || !graphData.nodes) return null;
+      const [mouseX, mouseY] = d3.pointer(event, svgRef.current);
+      let bestMatch: string | null = null;
+      let minDistanceSq = Infinity;
+
+      const baseNodeSVGInteractRadius = 11;
+
+      graphData.nodes.forEach(node => {
+        if (node.x === undefined || node.y === undefined) return;
+        
+        const [screenX, screenY] = transform.apply([node.x, node.y]);
+        const effectiveScreenHitRadius = baseNodeSVGInteractRadius * transform.k;
+        
+        const dx = mouseX - screenX;
+        const dy = mouseY - screenY;
+        const distSq = dx * dx + dy * dy;
+        
+        if (distSq < effectiveScreenHitRadius * effectiveScreenHitRadius) {
+          if (distSq < minDistanceSq) {
+             minDistanceSq = distSq;
+             bestMatch = node.id;
+          }
+        }
+      });
+      return bestMatch;
+    };
+
+    const zoomBehavior = d3.zoom<SVGSVGElement, unknown>().scaleExtent([0.1, 4])
+      .on("start", (event) => {
+        setIsZooming(true);
+      })
+      .on("zoom", (event) => {
+        g.attr("transform", event.transform);
+        let nodeUnderMouse = null;
+        if(enableHoverEffects) {
+            nodeUnderMouse = findNodeUnderMouse(event.sourceEvent || event, event.transform);
+        }
+        if (hoveredNodeId !== nodeUnderMouse) {
+            setHoveredNodeId(nodeUnderMouse);
+        }
+        _updateVisualStyles(nodeUnderMouse, enableHoverEffects, graphData, intraGraphCompactness, svg.node(), linkSelectionRef.current, textSelectionRef.current, nodeSelectionRef.current, finalRootNodeIds);
+      })
+      .on("end", (event) => {
+        setIsZooming(false);
+        let nodeUnderMouse = null;
+        if(enableHoverEffects) {
+            nodeUnderMouse = findNodeUnderMouse(event.sourceEvent || event, event.transform);
+        }
+        if (hoveredNodeId !== nodeUnderMouse) {
+            setHoveredNodeId(nodeUnderMouse);
+        }
+        _updateVisualStyles(nodeUnderMouse, enableHoverEffects, graphData, intraGraphCompactness, svg.node(), linkSelectionRef.current, textSelectionRef.current, nodeSelectionRef.current, finalRootNodeIds);
+      });
+      
+    svg.call(zoomBehavior).call(zoomBehavior.transform, d3.zoomIdentity.translate(width / 2, height / 2));
+    svg.on("click", (event: MouseEvent) => {
+        if (event.target === svg.node() && hoveredNodeId !== null) {
+            setHoveredNodeId(null);
+        }
+        handleBackgroundClick();
+    }, true);
+
+    _updateVisualStyles(hoveredNodeId, enableHoverEffects, graphData, intraGraphCompactness, svg.node(), linkSelectionRef.current, textSelectionRef.current, nodeSelectionRef.current, finalRootNodeIds);
+
+    simulation.alpha(0.5).restart();
+
     simulation.on("tick", () => {
-      link
-        .attr("x1", (d) => (typeof d.source === "string" ? 0 : d.source.x || 0))
-        .attr("y1", (d) => (typeof d.source === "string" ? 0 : d.source.y || 0))
-        .attr("x2", (d) => (typeof d.target === "string" ? 0 : d.target.x || 0))
-        .attr("y2", (d) => (typeof d.target === "string" ? 0 : d.target.y || 0))
+      linkElements
+        .attr("x1", (d) => (typeof d.source === "string" ? 0 : (d.source as Node).x || 0))
+        .attr("y1", (d) => (typeof d.source === "string" ? 0 : (d.source as Node).y || 0))
+        .attr("x2", (d) => (typeof d.target === "string" ? 0 : (d.target as Node).x || 0))
+        .attr("y2", (d) => (typeof d.target === "string" ? 0 : (d.target as Node).y || 0))
 
-      node.attr("transform", (d) => `translate(${d.x || 0},${d.y || 0})`)
+      nodeElements.attr("transform", (d: Node) => `translate(${d.x || 0},${d.y || 0})`)
     })
 
-    // Handle window resize
     const handleResize = () => {
       if (containerRef.current) {
         const newWidth = containerRef.current.clientWidth
         const newHeight = containerRef.current.clientHeight
         svg.attr("width", newWidth).attr("height", newHeight)
+        if (simulationRef.current) {
+            const updatedNumComponents = components.length;
+            if (updatedNumComponents > 1) {
+                const effectiveInterGraphDivisorResize = Math.max(1, interGraphCompactness);
+                const updatedComponentAnchorRadius = (Math.min(newWidth, newHeight) / effectiveInterGraphDivisorResize) * (Math.log(updatedNumComponents + 1) || 1);
+                const updatedComponentAnchors = components.map((_, k) => {
+                    const angle = (2 * Math.PI / updatedNumComponents) * k;
+                    return {
+                        x: updatedComponentAnchorRadius * Math.cos(angle),
+                        y: updatedComponentAnchorRadius * Math.sin(angle),
+                    };
+                });
+
+                components.forEach((_componentNodes, k) => {
+                    const anchorX = updatedComponentAnchors[k].x;
+                    const anchorY = updatedComponentAnchors[k].y;
+                    simulationRef.current!.force<d3.ForceX<Node>>(`anchorX-${k}`)?.x(anchorX);
+                    simulationRef.current!.force<d3.ForceY<Node>>(`anchorY-${k}`)?.y(anchorY);
+                    simulationRef.current!.force<d3.ForceRadial<Node>>(`radial-${k}`)?.x(anchorX).y(anchorY); 
+                });
+            }
+           simulationRef.current.alpha(0.3).restart();
+        }
       }
     }
 
@@ -642,7 +1039,118 @@ export default function MindMap({ initialGraphDataFromFolder }: MindMapProps) {
       window.removeEventListener("resize", handleResize)
       simulation.stop()
     }
-  }, [graphData])
+  }, [graphData, intraGraphCompactness, interGraphCompactness, enableHoverEffects]);
+
+  // This useEffect is still valuable for when hoveredNodeId is set by non-zoom pointer events
+  useEffect(() => {
+    const tempSvgNode = d3.select(svgRef.current).node();
+    
+    const currentComponents = findConnectedComponents(graphData.nodes, graphData.links);
+    const currentPotentialRootNodeIds = new Set<string>();
+    currentComponents.forEach((comp) => {
+      let minLevel = Infinity;
+      comp.forEach(node => { if (node.level < minLevel) minLevel = node.level; });
+      comp.forEach(node => { if (node.level === minLevel) currentPotentialRootNodeIds.add(node.id); });
+    });
+    const currentFinalRootNodeIds = new Set<string>();
+    currentPotentialRootNodeIds.forEach(nodeId => {
+      let isTrueRoot = true;
+      for (const link_data of graphData.links) {
+        const linkTargetId = typeof link_data.target === 'string' ? link_data.target : (link_data.target as Node).id;
+        const linkSourceId = typeof link_data.source === 'string' ? link_data.source : (link_data.source as Node).id;
+        if (linkTargetId === nodeId && link_data.type === 'parent-child' && currentPotentialRootNodeIds.has(linkSourceId)) {
+          isTrueRoot = false; break;
+        }
+      }
+      if (isTrueRoot) currentFinalRootNodeIds.add(nodeId);
+    });
+
+    _updateVisualStyles(
+      hoveredNodeId, 
+      enableHoverEffects, 
+      graphData, 
+      intraGraphCompactness, 
+      tempSvgNode, 
+      linkSelectionRef.current, 
+      textSelectionRef.current, 
+      nodeSelectionRef.current, 
+      currentFinalRootNodeIds
+    );
+  }, [hoveredNodeId, enableHoverEffects, graphData, intraGraphCompactness]);
+
+  const _updateVisualStyles = (
+    currentHoverId: string | null,
+    isHoverEnabled: boolean,
+    currentGraphData: GraphData, 
+    currentIntraGraphCompactness: number, 
+    svgNode: SVGSVGElement | null,
+    linksSel: d3.Selection<SVGLineElement, Link, SVGGElement, any> | null,
+    textsSel: d3.Selection<SVGTextElement, Node, SVGGElement, any> | null,
+    nodesSel: d3.Selection<SVGGElement, Node, SVGGElement, any> | null,
+    finalRootIds: Set<string>
+  ) => {
+    if (svgNode) {
+        const currentZoomScale = d3.zoomTransform(svgNode).k.toFixed(2);
+        console.log(`_updateVisualStyles called. Hovered ID: ${currentHoverId}, Zoom Scale: ${currentZoomScale}`);
+    } else {
+        console.log(`_updateVisualStyles called. Hovered ID: ${currentHoverId}, SVGNode not available for scale.`);
+    }
+
+    if (!svgNode || !linksSel || !textsSel || !nodesSel) return;
+
+    const currentScale = d3.zoomTransform(svgNode).k;
+    const effectiveFontSizeBase = BASE_SVG_FONT_SIZE * currentScale;
+
+    let directlyConnectedToHovered = new Set<string>();
+    if (isHoverEnabled && currentHoverId) {
+      directlyConnectedToHovered.add(currentHoverId);
+      currentGraphData.links.forEach(l => {
+        const sourceId = typeof l.source === 'string' ? l.source : (l.source as Node).id;
+        const targetId = typeof l.target === 'string' ? l.target : (l.target as Node).id;
+        if (sourceId === currentHoverId) directlyConnectedToHovered.add(targetId);
+        if (targetId === currentHoverId) directlyConnectedToHovered.add(sourceId);
+      });
+    }
+
+    nodesSel.selectAll<SVGCircleElement, Node>(".node-base")
+      .attr("fill", d_node => finalRootIds.has(d_node.id) ? "white" : "transparent")
+      .attr("stroke", d_node => (isHoverEnabled && d_node.id === currentHoverId) ? "rgba(200,200,255,0.7)" : null)
+      .attr("stroke-width", d_node => (isHoverEnabled && d_node.id === currentHoverId) ? 2 : null);
+
+    linksSel.attr("stroke", (d_link: Link) => {
+        const sourceId = typeof d_link.source === 'string' ? d_link.source : (d_link.source as Node).id;
+        const targetId = typeof d_link.target === 'string' ? d_link.target : (d_link.target as Node).id;
+        return (isHoverEnabled && currentHoverId && (sourceId === currentHoverId || targetId === currentHoverId)) ? "purple" : "#999";
+      })
+      .attr("stroke-width", (d_link: Link) => {
+        const sourceId = typeof d_link.source === 'string' ? d_link.source : (d_link.source as Node).id;
+        const targetId = typeof d_link.target === 'string' ? d_link.target : (d_link.target as Node).id;
+        return (isHoverEnabled && currentHoverId && (sourceId === currentHoverId || targetId === currentHoverId)) ? 3 : (d_link.type === "parent-child" ? 2 : 1);
+      })
+      .attr("marker-start", (d_link: Link) => {
+        if (d_link.type !== "parent-child") return null;
+        const sourceId = typeof d_link.source === 'string' ? d_link.source : (d_link.source as Node).id;
+        const targetId = typeof d_link.target === 'string' ? d_link.target : (d_link.target as Node).id;
+        return (isHoverEnabled && currentHoverId && (sourceId === currentHoverId || targetId === currentHoverId)) ? "url(#triangle-purple)" : "url(#triangle-default)";
+      });
+
+    textsSel.attr("font-size", (d_text: Node) => 
+        (isHoverEnabled && currentHoverId && directlyConnectedToHovered.has(d_text.id)) ? `${fixedHighlightedFontSize}px` : `${BASE_SVG_FONT_SIZE}px`
+      )
+      .style("opacity", (d_text: Node) => {
+        if (isHoverEnabled && currentHoverId) {
+          if (directlyConnectedToHovered.has(d_text.id)) {
+            return 1.0; 
+          } else {
+            return OTHER_NODE_TEXT_OPACITY_ON_HOVER; 
+          }
+        } else { 
+          if (effectiveFontSizeBase >= FULLY_OPAQUE_EFFECTIVE_SIZE) return 1.0;
+          if (effectiveFontSizeBase <= INVISIBLE_EFFECTIVE_SIZE) return 0;
+          return d3.scaleLinear().domain([INVISIBLE_EFFECTIVE_SIZE, FULLY_OPAQUE_EFFECTIVE_SIZE]).range([0, 1.0]).clamp(true)(effectiveFontSizeBase);
+        }
+      });
+  };
 
   // Save mind map to JSON file
   const saveMindMapToFile = () => {
@@ -711,6 +1219,53 @@ export default function MindMap({ initialGraphDataFromFolder }: MindMapProps) {
       )}
 
       <div className="absolute bottom-4 right-4 flex flex-col gap-2 items-end">
+        {showSettings && (
+          <div 
+            className="bg-gray-800 p-4 rounded-lg shadow-xl mb-2 w-64"
+            onClick={(e) => e.stopPropagation()} // Prevent closing when clicking inside panel
+          >
+            <div>
+              <label htmlFor="intraGraphCompactness" className="block text-sm font-medium text-gray-300 mb-1">
+                Intra-Graph Compactness (Node Spacing)
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="range"
+                  id="intraGraphCompactness"
+                  name="intraGraphCompactness"
+                  min="0"
+                  max="10"
+                  step="0.1"
+                  value={intraGraphCompactness} 
+                  onChange={(e) => setIntraGraphCompactness(parseFloat(e.target.value))}
+                  className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                />
+                <span className="text-sm text-gray-400 w-8 text-right">{intraGraphCompactness.toFixed(1)}</span>
+              </div>
+              <p className="text-xs text-gray-500 mt-1">
+                0 = very wide, 10 = very compact nodes.
+              </p>
+            </div>
+
+            <div className="mt-4 pt-4 border-t border-gray-700">
+              <label className="flex items-center justify-between text-sm font-medium text-gray-300">
+                <span>Enable Hover Effects</span>
+                <input
+                  type="checkbox"
+                  checked={enableHoverEffects}
+                  onChange={(e) => setEnableHoverEffects(e.target.checked)}
+                  className="form-checkbox h-5 w-5 text-blue-500 bg-gray-700 border-gray-600 rounded focus:ring-blue-600"
+                />
+              </label>
+              <p className="text-xs text-gray-500 mt-1">
+                Highlight node and its connections on hover/touch.
+              </p>
+            </div>
+          </div>
+        )}
+        <Button onClick={() => setShowSettings(!showSettings)} variant="outline" size="sm">
+          {showSettings ? "Close Settings" : "Settings"}
+        </Button>
         <Button onClick={saveMindMapToFile} variant="outline" size="sm">
           Save to File
         </Button>
@@ -728,3 +1283,5 @@ export default function MindMap({ initialGraphDataFromFolder }: MindMapProps) {
     </div>
   )
 }
+
+
