@@ -76,6 +76,11 @@ export function MarkdownEditor({
     }
   }
 
+  const handleFormSubmit = (e: React.FormEvent) => {
+    e.preventDefault(); // Prevent default form submission
+    handleNewRelation();
+  };
+
   const handleRelationshipUpdate = (oldType: string, index: number, newValue: string) => {
     const command = newValue.charAt(0)
     const name = newValue.slice(1).trim()
@@ -137,19 +142,24 @@ export function MarkdownEditor({
 
         <div className="p-4 flex flex-col gap-2 flex-grow overflow-y-auto">
           <div className="relative">
-            <Input
-              ref={newRelationInputRef}
-              autoFocus
-              value={newRelation}
-              onChange={(e) => setNewRelation(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  handleNewRelation()
-                }
-              }}
-              placeholder="Type >, <, or = followed by note name"
-              className="bg-zinc-800 border border-zinc-700 text-white placeholder:text-zinc-400 rounded-md px-3 h-10 w-full"
-            />
+            <form onSubmit={handleFormSubmit}>
+              <Input
+                ref={newRelationInputRef}
+                autoFocus
+                value={newRelation}
+                onChange={(e) => setNewRelation(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) { // Prevent adding relationship when Shift+Enter is pressed (for new line in content)
+                    e.preventDefault(); // Prevent default Enter behavior (like new line in a textarea if it were one)
+                    handleNewRelation()
+                  }
+                }}
+                placeholder="Type >, <, or = followed by note name"
+                className="bg-zinc-800 border border-zinc-700 text-white placeholder:text-zinc-400 rounded-md px-3 h-10 w-full"
+              />
+              {/* Hidden submit button to enable form submission on mobile "send" button press */}
+              <button type="submit" style={{ display: 'none' }} aria-hidden="true" />
+            </form>
             {showRecommendations && recommendations.length > 0 && (
               <div className="absolute z-20 bg-zinc-900 border border-zinc-700 rounded shadow max-h-48 overflow-y-auto w-full mt-1">
                 {recommendations.map((n) => (
