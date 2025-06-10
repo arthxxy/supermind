@@ -6,39 +6,15 @@ import { NodeToolbar } from "@/components/node-toolbar"
 import { Button } from "@/components/ui/button"
 import { PlusCircle } from "lucide-react"
 import { MarkdownEditor } from "@/components/markdown-editor"
+import { findConnectedComponents, recalculateLevelsInComponent } from "@/lib/graph-utils"
+import { createSiblingDistributionForce } from "@/lib/d3-custom-forces"
+import type { Node, Link, GraphData, Relationship } from "@/lib/types"
 
 // Constants for text visibility based on effective font size
 const BASE_SVG_FONT_SIZE = 12; // The actual font size set on SVG <text> elements
 const FULLY_OPAQUE_EFFECTIVE_SIZE = 10;   // Effective px size. Above this: Opacity 1
 const INVISIBLE_EFFECTIVE_SIZE = 7;        // Effective px size. Below this: Opacity 0.
 const OTHER_NODE_TEXT_OPACITY_ON_HOVER = 0.2; // New constant for dimmed text
-
-interface Relationship {
-  type: "friend" | "child" | "parent";
-  targetId: string;
-  targetName: string;
-}
-
-interface Node extends d3.SimulationNodeDatum {
-  id: string;
-  name: string;
-  level: number;
-  color?: string;
-  content?: string;
-  x?: number;
-  y?: number;
-}
-
-interface Link extends d3.SimulationLinkDatum<Node> {
-  source: string | Node;
-  target: string | Node;
-  type: "parent-child" | "friend";
-}
-
-interface GraphData {
-  nodes: Node[];
-  links: Link[];
-}
 
 // Props for the MindMap component
 interface MindMapProps {
@@ -73,206 +49,7 @@ const initialData: GraphData = {
   ],
 }
 
-// Custom force for distributing sibling nodes
-function createSiblingDistributionForce(
-  initialNodes: Node[], 
-  initialLinks: Link[], 
-  strengthVal: number, 
-  idealLinkDistanceVal: number
-): d3.Force<Node, Link> { 
-  let nodes: Node[];
-  let links: Link[]; // All links
-  let parentChildLinks: Link[]; // Filtered parent-child links
-  let nodesMap: Map<string, Node>;
-  let strength = strengthVal;
-  let idealLinkDistance = idealLinkDistanceVal;
-
-  function force(alpha: number) {
-    if (!nodes || !parentChildLinks || !nodesMap) return;
-
-    const childrenByParent = new Map<string, Node[]>();
-    parentChildLinks.forEach(link => {
-      const sourceId = typeof link.source === 'string' ? link.source : (link.source as Node).id;
-      const targetNode = typeof link.target === 'string' ? nodesMap.get(link.target) : link.target as Node;
-      if (targetNode) {
-        if (!childrenByParent.has(sourceId)) {
-          childrenByParent.set(sourceId, []);
-        }
-        childrenByParent.get(sourceId)!.push(targetNode);
-      }
-    });
-
-    childrenByParent.forEach((children, parentId) => {
-      const parentNode = nodesMap.get(parentId);
-      if (!parentNode || children.length <= 1 || parentNode.x === undefined || parentNode.y === undefined) {
-        return;
-      }
-
-      const angleStep = (2 * Math.PI) / children.length;
-
-      children.forEach((child, i) => {
-        if (child.x === undefined || child.y === undefined) {
-          child.x = parentNode.x! + (Math.random() - 0.5) * 0.1; // Small random offset
-          child.y = parentNode.y! + (Math.random() - 0.5) * 0.1; // Small random offset
-        }
-
-        const targetX = parentNode.x! + idealLinkDistance * Math.cos(i * angleStep);
-        const targetY = parentNode.y! + idealLinkDistance * Math.sin(i * angleStep);
-
-        child.vx = (child.vx || 0) + (targetX - child.x!) * strength * alpha;
-        child.vy = (child.vy || 0) + (targetY - child.y!) * strength * alpha;
-      });
-    });
-  }
-
-  force.initialize = (_nodes: Node[], random?: () => number) => {
-    nodes = _nodes;
-    nodesMap = new Map(nodes.map(n => [n.id, n]));
-    // Links are already initialized from the constructor scope
-  };
-  
-  force.strength = function(_strength?: number) {
-    if (_strength === undefined) return strength;
-    strength = _strength;
-    return force;
-  };
-
-  force.links = function(_links?: Link[]) {
-    if (_links === undefined) return links; // Return all links
-    links = _links;
-    parentChildLinks = links.filter(link => link.type === 'parent-child');
-    return force;
-  };
-  
-  force.nodes = function(_nodes?: Node[]) {
-    if (_nodes === undefined) return nodes;
-    nodes = _nodes;
-    nodesMap = new Map(nodes.map(n => [n.id, n]));
-    return force;
-  };
-
-  force.distance = function(_distance?: number) {
-    if (_distance === undefined) return idealLinkDistance;
-    idealLinkDistance = _distance;
-    return force;
-  };
-
-  // Initialize internal links arrays during creation
-  links = initialLinks;
-  parentChildLinks = initialLinks.filter(link => link.type === 'parent-child');
-  // nodes will be set by D3 via initialize, but we can also set nodesMap early if initialNodes are passed
-  if (initialNodes) {
-    nodes = initialNodes;
-    nodesMap = new Map(initialNodes.map(n => [n.id, n]));
-  }
-
-  return force;
-}
-
-// Helper function to find connected components (subgraphs)
-function findConnectedComponents(nodes: Node[], links: Link[]): Node[][] {
-  const visited = new Set<string>();
-  const components: Node[][] = [];
-  const adj = new Map<string, string[]>();
-
-  nodes.forEach(node => adj.set(node.id, []));
-  links.forEach(link => {
-    const sourceId = typeof link.source === 'string' ? link.source : (link.source as Node).id;
-    const targetId = typeof link.target === 'string' ? link.target : (link.target as Node).id;
-    adj.get(sourceId)?.push(targetId);
-    adj.get(targetId)?.push(sourceId);
-  });
-
-  function dfs(nodeId: string, currentComponent: Node[]) {
-    visited.add(nodeId);
-    const node = nodes.find(n => n.id === nodeId);
-    if (node) {
-      currentComponent.push(node);
-    }
-    adj.get(nodeId)?.forEach(neighborId => {
-      if (!visited.has(neighborId)) {
-        dfs(neighborId, currentComponent);
-      }
-    });
-  }
-
-  nodes.forEach(node => {
-    if (!visited.has(node.id)) {
-      const currentComponent: Node[] = [];
-      dfs(node.id, currentComponent);
-      if (currentComponent.length > 0) {
-        components.push(currentComponent);
-      }
-    }
-  });
-
-  return components;
-}
-
-// Helper function to recalculate levels within a component
-function recalculateLevelsInComponent(
-  componentNodeIds: Set<string>,
-  allNodes: Node[],
-  allLinks: Link[]
-): Map<string, number> {
-  const newLevels = new Map<string, number>();
-  const nodesInComponent = allNodes.filter(n => componentNodeIds.has(n.id));
-  const linksInOrToComponent = allLinks.filter(l => {
-    const sourceId = typeof l.source === 'string' ? l.source : (l.source as Node).id;
-    const targetId = typeof l.target === 'string' ? l.target : (l.target as Node).id;
-    return componentNodeIds.has(sourceId) || componentNodeIds.has(targetId);
-  });
-
-  const adj = new Map<string, string[]>(); // Child to parents within component
-  const childrenMap = new Map<string, string[]>(); // Parent to children within component
-  nodesInComponent.forEach(n => {
-    adj.set(n.id, []);
-    childrenMap.set(n.id, []);
-  });
-
-  const componentRoots = new Set<string>(nodesInComponent.map(n => n.id));
-
-  linksInOrToComponent.forEach(link => {
-    if (link.type === 'parent-child') {
-      const sourceId = typeof link.source === 'string' ? link.source : (link.source as Node).id;
-      const targetId = typeof link.target === 'string' ? link.target : (link.target as Node).id;
-      // Only consider links where both ends are in the component for parent-child relationships
-      if (componentNodeIds.has(sourceId) && componentNodeIds.has(targetId)) {
-        adj.get(targetId)?.push(sourceId); // targetId has parent sourceId
-        childrenMap.get(sourceId)?.push(targetId); // sourceId has child targetId
-        componentRoots.delete(targetId); // Node with a parent in the component is not a root
-      }
-    }
-  });
-
-  const queue: { nodeId: string; level: number }[] = [];
-  componentRoots.forEach(rootId => {
-    queue.push({ nodeId: rootId, level: 0 });
-    newLevels.set(rootId, 0);
-  });
-
-  let head = 0;
-  while (head < queue.length) {
-    const { nodeId, level } = queue[head++];
-    const children = childrenMap.get(nodeId) || [];
-    for (const childId of children) {
-      if (!newLevels.has(childId)) { // Avoid cycles and re-processing
-        newLevels.set(childId, level + 1);
-        queue.push({ nodeId: childId, level: level + 1 });
-      }
-    }
-  }
-  // Ensure all nodes in component get a level, even if disconnected somehow (assign high level)
-  nodesInComponent.forEach(node => {
-    if (!newLevels.has(node.id)) {
-      newLevels.set(node.id, 99); // Fallback for orphaned nodes within the conceptual component
-    }
-  });
-
-  return newLevels;
-}
-
-export default function MindMap({ initialGraphDataFromFolder }: MindMapProps) {
+export default function MindMap({ initialGraphDataFromFolder, initialNodeId, mapId }: MindMapProps) {
   const [graphData, setGraphData] = useState<GraphData>(
     initialGraphDataFromFolder || initialData // Prioritize folder data if available
   )
@@ -303,11 +80,11 @@ export default function MindMap({ initialGraphDataFromFolder }: MindMapProps) {
   // Adjusted base values for stronger hierarchy
   const baseParentChildLinkDist = 60 * internalScale; // Adjusted slightly
   const baseFriendLinkDist = 100 * internalScale;
-  const baseMultiCompRadialLevelMultiplier = 100 * internalScale; // Increased for more level separation
-  const baseMultiCompRadialBaseOffset = 20 * internalScale;    // Decreased to bring roots closer to center
-  const baseSingleCompRadialLevelMultiplier = 110 * internalScale; // Increased
-  const baseSingleCompRadialBaseOffset = 30 * internalScale;     // Decreased
-  const baseManyBodyStrength = -700 * internalScale;
+  const baseMultiCompRadialLevelMultiplier = 100 * internalScale; // Reverted from 130
+  const baseMultiCompRadialBaseOffset = 20 * internalScale;
+  const baseSingleCompRadialLevelMultiplier = 110 * internalScale; // Reverted from 140
+  const baseSingleCompRadialBaseOffset = 30 * internalScale;
+  const baseManyBodyStrength = -600 * internalScale;
   const baseCollideRadius = 25 * internalScale; // Slightly smaller to allow tighter packing if hierarchy dictates
   const baseSiblingDistForceIdealLinkDistance = 60 * internalScale;
 
@@ -322,6 +99,17 @@ export default function MindMap({ initialGraphDataFromFolder }: MindMapProps) {
   const scaledCollideRadius = baseCollideRadius;
   const scaledSiblingDistForceIdealLinkDistance = baseSiblingDistForceIdealLinkDistance;
   const fixedHighlightedFontSize = 16; // For hovered text
+
+  // Load initial node if initialNodeId is provided
+  useEffect(() => {
+    if (initialNodeId) {
+      const nodeToSelect = graphData.nodes.find((n: Node) => n.id === initialNodeId);
+      if (nodeToSelect) {
+        setSelectedNode(nodeToSelect);
+        // Optionally, also set it as editing node or trigger other actions
+      }
+    }
+  }, [initialNodeId, graphData.nodes]);
 
   // Effect to update graphData if initialGraphDataFromFolder changes
   useEffect(() => {
@@ -343,8 +131,8 @@ export default function MindMap({ initialGraphDataFromFolder }: MindMapProps) {
     const relationships: Relationship[] = []
     
     for (const link of graphData.links) {
-      const sourceId = typeof link.source === 'string' ? link.source : link.source.id
-      const targetId = typeof link.target === 'string' ? link.target : link.target.id
+      const sourceId = typeof link.source === 'string' ? link.source : (link.source as Node).id
+      const targetId = typeof link.target === 'string' ? link.target : (link.target as Node).id
       const sourceNode = graphData.nodes.find(n => n.id === sourceId)
       const targetNode = graphData.nodes.find(n => n.id === targetId)
       
@@ -371,7 +159,7 @@ export default function MindMap({ initialGraphDataFromFolder }: MindMapProps) {
   // Function to add a new node
   const addNode = (parentId: string, nodeName: string) => {
     const newNodeId = `node-${Date.now()}`
-    const parentNode = graphData.nodes.find((node) => node.id === parentId)
+    const parentNode = graphData.nodes.find((node: Node) => node.id === parentId)
 
     const colors = ["#ff6b6b", "#48dbfb", "#1dd1a1", "#feca57", "#54a0ff"]
 
@@ -383,7 +171,7 @@ export default function MindMap({ initialGraphDataFromFolder }: MindMapProps) {
         level: 0,
         color: colors[0],
       }
-      setGraphData((prev) => ({
+      setGraphData((prev: GraphData) => ({
         nodes: [...prev.nodes, newNode],
         links: [...prev.links],
       }))
@@ -405,7 +193,7 @@ export default function MindMap({ initialGraphDataFromFolder }: MindMapProps) {
       type: "parent-child"
     }
 
-    setGraphData((prev) => ({
+    setGraphData((prev: GraphData) => ({
       nodes: [...prev.nodes, newNode],
       links: [...prev.links, newLink],
     }))
@@ -413,12 +201,12 @@ export default function MindMap({ initialGraphDataFromFolder }: MindMapProps) {
 
   // Function to delete a node
   const deleteNode = (nodeId: string) => {
-    setGraphData((prev) => ({
-      nodes: prev.nodes.filter((node) => node.id !== nodeId),
+    setGraphData((prev: GraphData) => ({
+      nodes: prev.nodes.filter((node: Node) => node.id !== nodeId),
       links: prev.links.filter(
-        (link) =>
-          (typeof link.source === "string" ? link.source !== nodeId : link.source.id !== nodeId) &&
-          (typeof link.target === "string" ? link.target !== nodeId : link.target.id !== nodeId),
+        (link: Link) =>
+          (typeof link.source === "string" ? link.source !== nodeId : (link.source as Node).id !== nodeId) &&
+          (typeof link.target === "string" ? link.target !== nodeId : (link.target as Node).id !== nodeId),
       ),
     }))
     setSelectedNode(null)
@@ -427,8 +215,8 @@ export default function MindMap({ initialGraphDataFromFolder }: MindMapProps) {
 
   // Function to add a relationship (simplified/reverted)
   const addRelationship = (sourceId: string, command: string, targetName: string) => {
-    const sourceNode = graphData.nodes.find(node => node.id === sourceId);
-    let targetNode = graphData.nodes.find(node => node.name === targetName);
+    const sourceNode = graphData.nodes.find((node: Node) => node.id === sourceId);
+    let targetNode = graphData.nodes.find((node: Node) => node.name === targetName);
 
     if (!sourceNode) return;
 
@@ -473,7 +261,7 @@ export default function MindMap({ initialGraphDataFromFolder }: MindMapProps) {
       let targetComponentNodeIds: Set<string> | null = null;
 
       for (const comp of allComponents) {
-        const compIds = new Set(comp.map(n => n.id));
+        const compIds = new Set(comp.map((n: Node) => n.id));
         if (compIds.has(sourceId) || compIds.has(newTargetNodeId!)) {
           targetComponentNodeIds = compIds;
           break;
@@ -482,7 +270,7 @@ export default function MindMap({ initialGraphDataFromFolder }: MindMapProps) {
 
       if (targetComponentNodeIds) {
         const newLevelsMap = recalculateLevelsInComponent(targetComponentNodeIds, newNodes, newLinks);
-        newNodes = newNodes.map(n => {
+        newNodes = newNodes.map((n: Node) => {
           if (newLevelsMap.has(n.id)) {
             const newLvl = newLevelsMap.get(n.id)!;
             return { 
@@ -505,19 +293,19 @@ export default function MindMap({ initialGraphDataFromFolder }: MindMapProps) {
   // Function to update a relationship
   const updateRelationship = (nodeId: string, oldType: string, newCommand: string, targetName: string) => {
     const oldRelationships = getNodeRelationships(nodeId)
-    const oldRelationship = oldRelationships.find(r => 
+    const oldRelationship = oldRelationships.find((r: Relationship) => 
       r.type === oldType && 
-      graphData.nodes.find(n => n.id === r.targetId)?.name === targetName
+      graphData.nodes.find((n: Node) => n.id === r.targetId)?.name === targetName
     )
 
     if (!oldRelationship) return
 
     // Remove old link
-    setGraphData(prev => ({
+    setGraphData((prev: GraphData) => ({
       ...prev,
-      links: prev.links.filter(link => {
-        const sourceId = typeof link.source === 'string' ? link.source : link.source.id
-        const targetId = typeof link.target === 'string' ? link.target : link.target.id
+      links: prev.links.filter((link: Link) => {
+        const sourceId = typeof link.source === 'string' ? link.source : (link.source as Node).id
+        const targetId = typeof link.target === 'string' ? link.target : (link.target as Node).id
         return !(
           (sourceId === nodeId && targetId === oldRelationship.targetId) ||
           (targetId === nodeId && sourceId === oldRelationship.targetId)
@@ -526,7 +314,7 @@ export default function MindMap({ initialGraphDataFromFolder }: MindMapProps) {
     }))
 
     // Add new link
-    const targetNode = graphData.nodes.find(n => n.id === oldRelationship.targetId)
+    const targetNode = graphData.nodes.find((n: Node) => n.id === oldRelationship.targetId)
     if (!targetNode) return
 
     const newLink: Link = {
@@ -535,7 +323,7 @@ export default function MindMap({ initialGraphDataFromFolder }: MindMapProps) {
       type: newCommand === '=' ? "friend" : "parent-child"
     }
 
-    setGraphData(prev => ({
+    setGraphData((prev: GraphData) => ({
       ...prev,
       links: [...prev.links, newLink]
     }))
@@ -543,14 +331,14 @@ export default function MindMap({ initialGraphDataFromFolder }: MindMapProps) {
 
   // Function to delete a relationship (link) from a node
   const deleteRelationship = (nodeId: string, relType: string, targetName: string) => {
-    setGraphData(prev => {
+    setGraphData((prev: GraphData) => {
       // Find the target node by name
-      const targetNode = prev.nodes.find(n => n.name === targetName)
+      const targetNode = prev.nodes.find((n: Node) => n.name === targetName)
       if (!targetNode) return prev
       // Remove the link that matches the relationship
-      const filteredLinks = prev.links.filter(link => {
-        const sourceId = typeof link.source === 'string' ? link.source : link.source.id
-        const targetId = typeof link.target === 'string' ? link.target : link.target.id
+      const filteredLinks = prev.links.filter((link: Link) => {
+        const sourceId = typeof link.source === 'string' ? link.source : (link.source as Node).id
+        const targetId = typeof link.target === 'string' ? link.target : (link.target as Node).id
         if (relType === 'child') {
           return !(sourceId === nodeId && targetId === targetNode.id && link.type === 'parent-child')
         } else if (relType === 'parent') {
@@ -567,83 +355,28 @@ export default function MindMap({ initialGraphDataFromFolder }: MindMapProps) {
 
   // Update node content
   const updateNodeContent = (nodeId: string, content: string) => {
-    setGraphData((prev) => {
-      // Store current positions of all nodes
-      const nodePositions = new Map(
-        prev.nodes.map(node => [node.id, { 
-          x: node.x || 0, 
-          y: node.y || 0, 
-          fx: node.fx, 
-          fy: node.fy 
-        }])
-      );
-
-      // Update nodes while preserving positions
-      const updatedNodes = prev.nodes.map(node => {
-        const pos = nodePositions.get(node.id);
-        return {
-          ...node,
-          content: node.id === nodeId ? content : node.content,
-          // Preserve position for all nodes
-          x: pos?.x,
-          y: pos?.y,
-          fx: pos?.fx,
-          fy: pos?.fy
-        };
-      });
-
-      // Preserve link structure
-      const updatedLinks = prev.links.map(link => {
-        const sourceId = typeof link.source === 'string' ? link.source : link.source.id;
-        const targetId = typeof link.target === 'string' ? link.target : link.target.id;
-        
-        const sourceNode = updatedNodes.find(n => n.id === sourceId);
-        const targetNode = updatedNodes.find(n => n.id === targetId);
-
-        if (!sourceNode || !targetNode) return link;
-
-        return {
-          ...link,
-          source: sourceNode,
-          target: targetNode,
-          type: link.type
-        };
-      });
-
-      // Update simulation while preserving positions
-      if (simulationRef.current) {
-        // Stop any ongoing simulation
-        simulationRef.current.stop();
-        
-        // Update nodes and links
-        simulationRef.current.nodes(updatedNodes);
-        simulationRef.current.force("link", d3.forceLink<Node, Link>(updatedLinks)
-          .id((d) => d.id)
-          .distance((link) => link.type === "friend" ? 100 : 60)
-          .strength((link) => link.type === "friend" ? 0.1 : 0.7)
-        );
-
-        // Restart with a very low alpha to minimize movement
-        simulationRef.current.alpha(0.1).restart();
-      }
-
-      return {
-        nodes: updatedNodes,
-        links: updatedLinks
-      };
-    });
+    setGraphData((prev: GraphData) => ({
+      ...prev,
+      nodes: prev.nodes.map((node: Node) =>
+        node.id === nodeId ? { ...node, content } : node
+      ),
+    }));
+    // If the editing node is the one being updated, reflect changes immediately if needed
+    if (editingNode && editingNode.id === nodeId) {
+        setEditingNode(prev => prev ? { ...prev, content } : null);
+    }
   };
 
   // Update node name and all references
   const updateNodeName = (nodeId: string, newName: string) => {
-    setGraphData((prev) => {
+    setGraphData((prev: GraphData) => {
       // Store current positions of all nodes
       const nodePositions = new Map(
         prev.nodes.map(node => [node.id, { x: node.x || 0, y: node.y || 0, fx: node.fx, fy: node.fy }])
       );
 
       // Update the node itself first
-      const updatedNodes = prev.nodes.map(node => {
+      const updatedNodes = prev.nodes.map((node: Node) => {
         if (node.id === nodeId) {
           return {
             ...node,
@@ -666,12 +399,12 @@ export default function MindMap({ initialGraphDataFromFolder }: MindMapProps) {
       });
 
       // Update links while preserving their structure
-      const updatedLinks = prev.links.map(link => {
-        const sourceId = typeof link.source === 'string' ? link.source : link.source.id;
-        const targetId = typeof link.target === 'string' ? link.target : link.target.id;
+      const updatedLinks = prev.links.map((link: Link) => {
+        const sourceId = typeof link.source === 'string' ? link.source : (link.source as Node).id;
+        const targetId = typeof link.target === 'string' ? link.target : (link.target as Node).id;
         
-        const sourceNode = updatedNodes.find(n => n.id === sourceId);
-        const targetNode = updatedNodes.find(n => n.id === targetId);
+        const sourceNode = updatedNodes.find((n: Node) => n.id === sourceId);
+        const targetNode = updatedNodes.find((n: Node) => n.id === targetId);
 
         if (!sourceNode || !targetNode) return link;
 
@@ -802,7 +535,7 @@ export default function MindMap({ initialGraphDataFromFolder }: MindMapProps) {
           .strength((link) => (link.type === "friend" ? 0.2 : 0.9))
       )
       .force("charge", d3.forceManyBody().strength(scaledManyBodyStrength))
-      .force("collide", d3.forceCollide().radius(scaledCollideRadius).strength(0.8));
+      .force("collide", d3.forceCollide().radius(scaledCollideRadius).strength(1));
 
     if (components.length > 0) {
       if (components.length > 1) {
@@ -882,13 +615,38 @@ export default function MindMap({ initialGraphDataFromFolder }: MindMapProps) {
       .attr("class", "node")
       .call(d3.drag<SVGGElement, Node>()
         .on("start", (event, d: Node) => {
-          if (!event.active) simulationRef.current?.alphaTarget(0.3).restart();
           d.fx = d.x ?? 0;
           d.fy = d.y ?? 0;
         })
-        .on("drag", (event, d: Node) => {
-          d.fx = event.x;
-          d.fy = event.y;
+        .on("drag", (event, draggedNode: Node) => {
+          draggedNode.fx = event.x;
+          draggedNode.fy = event.y;
+        
+          const repulsionThreshold = scaledCollideRadius * 2;
+        
+          graphData.nodes.forEach(otherNode => {
+            if (otherNode.id === draggedNode.id || otherNode.fx !== null) return;
+        
+            const dx = (otherNode.x || 0) - (draggedNode.fx as number);
+            const dy = (otherNode.y || 0) - (draggedNode.fy as number);
+            let distance = Math.sqrt(dx * dx + dy * dy);
+        
+            if (distance < repulsionThreshold) {
+              const overlap = repulsionThreshold - distance;
+              if (distance === 0) {
+                distance = 0.1;
+                const randomAngle = Math.random() * 2 * Math.PI;
+                otherNode.x = (otherNode.x || 0) + Math.cos(randomAngle) * 0.1;
+                otherNode.y = (otherNode.y || 0) + Math.sin(randomAngle) * 0.1;
+              }
+              
+              const pushX = (dx / distance) * overlap * 0.5;
+              const pushY = (dy / distance) * overlap * 0.5;
+        
+              otherNode.x = (otherNode.x || 0) + pushX;
+              otherNode.y = (otherNode.y || 0) + pushY;
+            }
+          });
         })
         .on("end", (event, d: Node) => {
           if (!event.active) simulationRef.current?.alphaTarget(0);
@@ -1000,6 +758,81 @@ export default function MindMap({ initialGraphDataFromFolder }: MindMapProps) {
         .attr("y2", (d) => (typeof d.target === "string" ? 0 : (d.target as Node).y || 0))
 
       nodeElements.attr("transform", (d: Node) => `translate(${d.x || 0},${d.y || 0})`)
+
+      // New: Enforce hierarchical distance rule
+      const componentCenters = new Map<number, { x: number; y: number }>();
+      if (components.length > 1) {
+        components.forEach((_, i) => {
+          // Use the anchor points calculated for multi-component layout
+          const anchorXForce = simulationRef.current?.force<d3.ForceX<Node>>(`anchorX-${i}`);
+          const anchorYForce = simulationRef.current?.force<d3.ForceY<Node>>(`anchorY-${i}`);
+          if (anchorXForce && anchorYForce) {
+            // @ts-ignore // D3 types might not directly expose x() and y() for all force types
+            componentCenters.set(i, { x: anchorXForce.x(), y: anchorYForce.y() });
+          }
+        });
+      } else {
+        // Single component, center is (0,0) due to forceCenter
+        if (components.length === 1) componentCenters.set(0, { x: 0, y: 0 });
+      }
+
+      processedLinks.forEach(link => {
+        if (link.type === "parent-child") {
+          const parent = link.source as Node;
+          const child = link.target as Node;
+
+          if (!parent.x || !parent.y || !child.x || !child.y) return; // Skip if positions are not defined
+          
+          const componentIndex = nodeToComponentIndex.get(parent.id);
+          if (componentIndex === undefined) return;
+
+          const center = componentCenters.get(componentIndex);
+          if (!center) return;
+
+          const distParentSq = (parent.x - center.x) ** 2 + (parent.y - center.y) ** 2;
+          const distChildSq = (child.x - center.x) ** 2 + (child.y - center.y) ** 2;
+
+          if (distChildSq <= distParentSq) {
+            const vecX = child.x - parent.x;
+            const vecY = child.y - parent.y;
+            const vecMag = Math.sqrt(vecX ** 2 + vecY ** 2);
+            const slightPushFactor = 1.05; // Push child slightly further than parent
+            const parentDist = Math.sqrt(distParentSq);
+
+            if (vecMag > 0.001) { // Avoid division by zero if parent and child are at the same spot
+                const desiredChildDist = parentDist * slightPushFactor;
+                // Calculate child's new position relative to the center
+                const dirToParentX = parent.x - center.x;
+                const dirToParentY = parent.y - center.y;
+                const dirToParentMag = Math.sqrt(dirToParentX**2 + dirToParentY**2);
+
+                if (dirToParentMag > 0.001) {
+                    // Position child along the line from center through parent, but further out
+                    const newChildX = center.x + (dirToParentX / dirToParentMag) * desiredChildDist;
+                    const newChildY = center.y + (dirToParentY / dirToParentMag) * desiredChildDist;
+                    
+                    // Nudge child slightly further along parent-child vector as well for stability
+                    const nudgeFactor = 0.1; // Small nudge
+                    child.x = newChildX + (vecX / vecMag) * nudgeFactor;
+                    child.y = newChildY + (vecY / vecMag) * nudgeFactor;
+
+                } else {
+                    // Parent is at the center, push child out along parent-child vector
+                    child.x = parent.x + (vecX / vecMag) * (parentDist * slightPushFactor - parentDist + 5); // Ensure it's further
+                    child.y = parent.y + (vecY / vecMag) * (parentDist * slightPushFactor - parentDist + 5);
+                }
+            } else {
+                 // Parent and child are at the same spot, push child away from parent slightly
+                 // This case should ideally be handled by collide force, but as a fallback:
+                 child.x = parent.x + (Math.random() - 0.5) * 5; 
+                 child.y = parent.y + (Math.random() - 0.5) * 5; 
+            }
+            // If node positions are fixed (fx, fy), this direct manipulation might conflict.
+            // Consider only applying if fx/fy are not set, or unsetting them.
+             child.fx = null; child.fy = null; // Ensure forces can continue to act on it after adjustment
+          }
+        }
+      });
     })
 
     const handleResize = () => {
