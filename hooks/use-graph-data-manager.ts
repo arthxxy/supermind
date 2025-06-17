@@ -104,9 +104,15 @@ export function useGraphDataManager(initialGraphData: GraphData): GraphDataManag
       if (!targetNode) {
         newTargetNodeId = `node-${Date.now()}`;
         const colors = ["#ff6b6b", "#48dbfb", "#1dd1a1", "#feca57", "#54a0ff"];
-        let newLevel = sourceNode.level;
-        if (command === '>') newLevel = sourceNode.level + 1;
-        else if (command === '<') newLevel = Math.max(0, sourceNode.level - 1);
+        let newLevel = sourceNode.level; // Default: same level as source for friends
+        
+        // Adjust level based on command
+        if (command === '>') {
+          newLevel = sourceNode.level + 1; // Child is one level deeper
+        } else if (command === '<') {
+          newLevel = Math.max(0, sourceNode.level - 1); // Parent is one level up
+        } 
+        // For '=' (friend), keep the same level as source
 
         const newNodeToAdd: Node = {
           id: newTargetNodeId,
@@ -126,7 +132,8 @@ export function useGraphDataManager(initialGraphData: GraphData): GraphDataManag
       };
       newLinks.push(newLink);
 
-      if (newLink.type === 'parent-child' || createdNewNode) {
+      // Always recalculate levels for new nodes, regardless of relationship type
+      if (createdNewNode) {
         const tempLinksForComponentFinding = [...prevGraphData.links, newLink];
         const allComponents = findConnectedComponents(newNodes, tempLinksForComponentFinding);
         let targetComponentNodeIds: Set<string> | null = null;
@@ -179,8 +186,33 @@ export function useGraphDataManager(initialGraphData: GraphData): GraphDataManag
         type: newCommand === '=' ? "friend" : "parent-child",
       };
       newLinks.push(newLinkToAdd);
-      // Potentially recalculate levels here as well if type changed to/from parent-child
-      return { ...prevGraphData, links: newLinks };
+      
+      // Always recalculate levels when changing relationship types
+      let newNodes = [...prevGraphData.nodes];
+      const tempLinksForComponentFinding = [...newLinks]; // Use the updated links
+      const allComponents = findConnectedComponents(newNodes, tempLinksForComponentFinding);
+      let targetComponentNodeIds: Set<string> | null = null;
+      
+      for (const comp of allComponents) {
+        const compIds = new Set(comp.map(n => n.id));
+        if (compIds.has(nodeId) || compIds.has(targetNodeObj.id)) {
+          targetComponentNodeIds = compIds;
+          break;
+        }
+      }
+      
+      if (targetComponentNodeIds) {
+        const newLevelsMap = recalculateLevelsInComponent(targetComponentNodeIds, newNodes, newLinks);
+        newNodes = newNodes.map(n => {
+          if (newLevelsMap.has(n.id)) {
+            const newLvl = newLevelsMap.get(n.id)!;
+            return { ...n, level: newLvl };
+          }
+          return n;
+        });
+      }
+      
+      return { nodes: newNodes, links: newLinks };
     });
   }, [getNodeRelationships]); // Added getNodeRelationships to dependencies
 

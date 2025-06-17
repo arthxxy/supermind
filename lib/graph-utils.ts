@@ -11,6 +11,7 @@ export function findConnectedComponents(nodes: Node[], links: Link[]): Node[][] 
   links.forEach(link => {
     const sourceId = typeof link.source === 'string' ? link.source : (link.source as Node).id;
     const targetId = typeof link.target === 'string' ? link.target : (link.target as Node).id;
+    // Add adjacency for all link types (parent-child and friend)
     if (adj.has(sourceId)) adj.get(sourceId)!.push(targetId);
     if (adj.has(targetId)) adj.get(targetId)!.push(sourceId);
   });
@@ -57,21 +58,29 @@ export function recalculateLevelsInComponent(
 
   const adj = new Map<string, string[]>();
   const childrenMap = new Map<string, string[]>();
+  const friendsMap = new Map<string, string[]>();
   nodesInComponent.forEach(n => {
     adj.set(n.id, []);
     childrenMap.set(n.id, []);
+    friendsMap.set(n.id, []);
   });
 
   const componentRoots = new Set<string>(nodesInComponent.map(n => n.id));
 
   linksInOrToComponent.forEach(link => {
+    const sourceId = typeof link.source === 'string' ? link.source : (link.source as Node).id;
+    const targetId = typeof link.target === 'string' ? link.target : (link.target as Node).id;
+    
     if (link.type === 'parent-child') {
-      const sourceId = typeof link.source === 'string' ? link.source : (link.source as Node).id;
-      const targetId = typeof link.target === 'string' ? link.target : (link.target as Node).id;
       if (componentNodeIds.has(sourceId) && componentNodeIds.has(targetId)) {
         adj.get(targetId)?.push(sourceId);
         childrenMap.get(sourceId)?.push(targetId);
         componentRoots.delete(targetId);
+      }
+    } else if (link.type === 'friend') {
+      if (componentNodeIds.has(sourceId) && componentNodeIds.has(targetId)) {
+        friendsMap.get(sourceId)?.push(targetId);
+        friendsMap.get(targetId)?.push(sourceId);
       }
     }
   });
@@ -89,6 +98,14 @@ export function recalculateLevelsInComponent(
       if (componentNodeIds.has(childId) && !newLevels.has(childId)) {
         newLevels.set(childId, level + 1);
         queue.push({ nodeId: childId, level: level + 1 });
+      }
+    });
+    
+    // Process friends - they should maintain the same level
+    friendsMap.get(nodeId)?.forEach(friendId => {
+      if (componentNodeIds.has(friendId) && !newLevels.has(friendId)) {
+        newLevels.set(friendId, level); // Friends are at the same level
+        queue.push({ nodeId: friendId, level: level });
       }
     });
   }

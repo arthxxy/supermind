@@ -508,21 +508,82 @@ export default function MindMap({ initialGraphDataFromFolder, initialNodeId, map
       comp.forEach(node => { if (node.level === minLevel) potentialRootNodeIds.add(node.id); });
     });
 
+    // First, identify all connected components through friend relationships
+    const friendConnectedGroups = new Map<string, Set<string>>();
+    
+    // Initialize each node as its own group
+    graphData.nodes.forEach(node => {
+      friendConnectedGroups.set(node.id, new Set([node.id]));
+    });
+    
+    // Merge groups based on friend relationships
+    processedLinks.forEach(link => {
+      if (link.type === 'friend') {
+        const sourceId = (link.source as Node).id;
+        const targetId = (link.target as Node).id;
+        
+        // Find the groups containing source and target
+        let sourceGroup: Set<string> | undefined;
+        let targetGroup: Set<string> | undefined;
+        
+        // Find existing groups
+        for (const [groupId, members] of friendConnectedGroups.entries()) {
+          if (members.has(sourceId)) {
+            sourceGroup = members;
+          }
+          if (members.has(targetId)) {
+            targetGroup = members;
+          }
+        }
+        
+        // If both nodes are already in groups, merge the groups
+        if (sourceGroup && targetGroup && sourceGroup !== targetGroup) {
+          // Merge target into source
+          targetGroup.forEach(nodeId => {
+            sourceGroup?.add(nodeId);
+            // Update the group reference for this node
+            friendConnectedGroups.set(nodeId, sourceGroup!);
+          });
+        }
+      }
+    });
+    
+    // Identify the oldest node in each friend group
+    const oldestInGroup = new Map<Set<string>, string>();
+    for (const [nodeId, group] of friendConnectedGroups.entries()) {
+      if (!oldestInGroup.has(group) || 
+          parseInt(nodeId.split('-')[1] || '0') < parseInt(oldestInGroup.get(group)!.split('-')[1] || '0')) {
+        oldestInGroup.set(group, nodeId);
+      }
+    }
+    
+    // Now determine root nodes
     const finalRootNodeIds = new Set<string>();
     potentialRootNodeIds.forEach(nodeId => {
       let isTrueDisplayRoot = true;
+      
+      // Check parent-child relationships
       for (const link of processedLinks) {
-        const linkTarget = link.target as Node;
-        const linkSource = link.source as Node;
-
-        if (linkTarget.id === nodeId && link.type === 'parent-child') {
-          if (potentialRootNodeIds.has(linkSource.id) && linkSource.level === linkTarget.level) {
+        if (link.type === 'parent-child') {
+          const linkTarget = link.target as Node;
+          const linkSource = link.source as Node;
+          
+          if (linkTarget.id === nodeId && potentialRootNodeIds.has(linkSource.id)) {
             isTrueDisplayRoot = false;
             break;
           }
         }
       }
-      if (isTrueDisplayRoot) finalRootNodeIds.add(nodeId);
+      
+      // Check if this is the oldest node in its friend group
+      const nodeGroup = friendConnectedGroups.get(nodeId);
+      if (nodeGroup && oldestInGroup.get(nodeGroup) !== nodeId) {
+        isTrueDisplayRoot = false;
+      }
+      
+      if (isTrueDisplayRoot) {
+        finalRootNodeIds.add(nodeId);
+      }
     });
 
     const simulation = d3
@@ -531,8 +592,8 @@ export default function MindMap({ initialGraphDataFromFolder, initialNodeId, map
         "link",
         d3.forceLink<Node, Link>(processedLinks)
           .id((d) => d.id)
-          .distance((link) => (link.type === "friend" ? scaledFriendLinkDist : scaledParentChildLinkDist))
-          .strength((link) => (link.type === "friend" ? 0.2 : 0.9))
+          .distance((link) => (link.type === "friend" ? scaledFriendLinkDist * 0.7 : scaledParentChildLinkDist))
+          .strength((link) => (link.type === "friend" ? 0.6 : 0.9)) // Increase strength for friend links
       )
       .force("charge", d3.forceManyBody().strength(scaledManyBodyStrength))
       .force("collide", d3.forceCollide().radius(scaledCollideRadius).strength(1));
@@ -885,17 +946,82 @@ export default function MindMap({ initialGraphDataFromFolder, initialNodeId, map
       comp.forEach(node => { if (node.level < minLevel) minLevel = node.level; });
       comp.forEach(node => { if (node.level === minLevel) currentPotentialRootNodeIds.add(node.id); });
     });
+    // First, identify all connected components through friend relationships
+    const friendConnectedGroups = new Map<string, Set<string>>();
+    
+    // Initialize each node as its own group
+    graphData.nodes.forEach(node => {
+      friendConnectedGroups.set(node.id, new Set([node.id]));
+    });
+    
+    // Merge groups based on friend relationships
+    graphData.links.forEach(link => {
+      if (link.type === 'friend') {
+        const sourceId = typeof link.source === 'string' ? link.source : (link.source as Node).id;
+        const targetId = typeof link.target === 'string' ? link.target : (link.target as Node).id;
+        
+        // Find the groups containing source and target
+        let sourceGroup: Set<string> | undefined;
+        let targetGroup: Set<string> | undefined;
+        
+        // Find existing groups
+        for (const [groupId, members] of friendConnectedGroups.entries()) {
+          if (members.has(sourceId)) {
+            sourceGroup = members;
+          }
+          if (members.has(targetId)) {
+            targetGroup = members;
+          }
+        }
+        
+        // If both nodes are already in groups, merge the groups
+        if (sourceGroup && targetGroup && sourceGroup !== targetGroup) {
+          // Merge target into source
+          targetGroup.forEach(nodeId => {
+            sourceGroup?.add(nodeId);
+            // Update the group reference for this node
+            friendConnectedGroups.set(nodeId, sourceGroup!);
+          });
+        }
+      }
+    });
+    
+    // Identify the oldest node in each friend group
+    const oldestInGroup = new Map<Set<string>, string>();
+    for (const [nodeId, group] of friendConnectedGroups.entries()) {
+      if (!oldestInGroup.has(group) || 
+          parseInt(nodeId.split('-')[1] || '0') < parseInt(oldestInGroup.get(group)!.split('-')[1] || '0')) {
+        oldestInGroup.set(group, nodeId);
+      }
+    }
+    
+    // Now determine root nodes
     const currentFinalRootNodeIds = new Set<string>();
     currentPotentialRootNodeIds.forEach(nodeId => {
       let isTrueRoot = true;
+      
+      // Check parent-child relationships
       for (const link_data of graphData.links) {
-        const linkTargetId = typeof link_data.target === 'string' ? link_data.target : (link_data.target as Node).id;
-        const linkSourceId = typeof link_data.source === 'string' ? link_data.source : (link_data.source as Node).id;
-        if (linkTargetId === nodeId && link_data.type === 'parent-child' && currentPotentialRootNodeIds.has(linkSourceId)) {
-          isTrueRoot = false; break;
+        if (link_data.type === 'parent-child') {
+          const linkTargetId = typeof link_data.target === 'string' ? link_data.target : (link_data.target as Node).id;
+          const linkSourceId = typeof link_data.source === 'string' ? link_data.source : (link_data.source as Node).id;
+          
+          if (linkTargetId === nodeId && currentPotentialRootNodeIds.has(linkSourceId)) {
+            isTrueRoot = false;
+            break;
+          }
         }
       }
-      if (isTrueRoot) currentFinalRootNodeIds.add(nodeId);
+      
+      // Check if this is the oldest node in its friend group
+      const nodeGroup = friendConnectedGroups.get(nodeId);
+      if (nodeGroup && oldestInGroup.get(nodeGroup) !== nodeId) {
+        isTrueRoot = false;
+      }
+      
+      if (isTrueRoot) {
+        currentFinalRootNodeIds.add(nodeId);
+      }
     });
 
     _updateVisualStyles(
