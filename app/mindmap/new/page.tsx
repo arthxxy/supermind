@@ -2,7 +2,7 @@
 
 import { useEffect, Suspense } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
-import MindMap from "@/components/mind-map"
+import MindMap from "@/components/mind-map-original"
 
 interface Node {
   id: string

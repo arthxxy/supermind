@@ -51,10 +51,13 @@ export function MarkdownEditor({
   useEffect(() => {
     setContent(node.content || "")
     setNodeName(node.name)
+  }, [node])
+
+  useEffect(() => {
     if (newRelationInputRef.current) {
       newRelationInputRef.current.focus()
     }
-  }, [node])
+  }, [])
 
   const handleContentChange = (newContent: string) => {
     setContent(newContent)
@@ -145,7 +148,6 @@ export function MarkdownEditor({
             <form onSubmit={handleFormSubmit}>
               <Input
                 ref={newRelationInputRef}
-                autoFocus
                 value={newRelation}
                 onChange={(e) => setNewRelation(e.target.value)}
                 onKeyDown={(e) => {
