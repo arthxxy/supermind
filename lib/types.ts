@@ -10,6 +10,13 @@ export interface Node extends d3.SimulationNodeDatum {
   y?: number;
   fx?: number | null; // fx and fy can be null (for unfixing)
   fy?: number | null;
+  textStyle?: {
+    fontSize?: number;
+    isBold?: boolean;
+    isItalic?: boolean;
+    isUnderline?: boolean;
+    isStrikethrough?: boolean;
+  };
 }
 
 export interface Link extends d3.SimulationLinkDatum<Node> {

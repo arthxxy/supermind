@@ -4,10 +4,11 @@ import { useEffect, useRef, useState } from "react"
 import * as d3 from "d3"
 import { NodeToolbar } from "@/components/node-toolbar"
 import { Button } from "@/components/ui/button"
+// @ts-ignore
 import { PlusCircle } from "lucide-react"
 import { MarkdownEditor } from "@/components/markdown-editor"
 import { findConnectedComponents, recalculateLevelsInComponent } from "@/lib/graph-utils"
-import { createSiblingDistributionForce } from "@/lib/d3-custom-forces"
+import { createSiblingDistributionForce, createHierarchicalForce } from "@/lib/d3-custom-forces"
 import type { Node, Link, GraphData, Relationship } from "@/lib/types"
 
 // Constants for text visibility based on effective font size
@@ -368,6 +369,20 @@ export default function MindMap({ initialGraphDataFromFolder, initialNodeId, map
     }
   };
 
+  // Update node text style
+  const updateNodeTextStyle = (nodeId: string, textStyle: Node['textStyle']) => {
+    setGraphData((prev: GraphData) => ({
+      ...prev,
+      nodes: prev.nodes.map((node: Node) =>
+        node.id === nodeId ? { ...node, textStyle } : node
+      ),
+    }));
+    // If the editing node is the one being updated, reflect changes immediately if needed
+    if (editingNode && editingNode.id === nodeId) {
+        setEditingNode(prev => prev ? { ...prev, textStyle } : null);
+    }
+  };
+
   // Update node name and all references
   const updateNodeName = (nodeId: string, newName: string) => {
     setGraphData((prev: GraphData) => {
@@ -587,24 +602,32 @@ export default function MindMap({ initialGraphDataFromFolder, initialNodeId, map
       }
     });
 
-    const simulation = d3
-      .forceSimulation<Node, Link>(graphData.nodes) 
-      .force(
-        "link",
-        d3.forceLink<Node, Link>(processedLinks)
-          .id((d) => d.id)
-          .distance((link) => (link.type === "friend" ? scaledFriendLinkDist * 0.7 : scaledParentChildLinkDist))
-          .strength((link) => (link.type === "friend" ? 0.6 : 0.9)) // Increase strength for friend links
+    // Create a force simulation with improved damping
+    const simulation = d3.forceSimulation<Node>(graphData.nodes)
+      .force("link", d3.forceLink<Node, Link>(graphData.links)
+        .id(d => d.id)
+        .distance(link => link.type === "friend" ? scaledFriendLinkDist : scaledParentChildLinkDist)
+        .strength(link => link.type === "friend" ? 0.3 : 0.8)
       )
       .force("charge", d3.forceManyBody().strength(scaledManyBodyStrength))
-      .force("collide", d3.forceCollide().radius(scaledCollideRadius).strength(1));
+      .force("collide", d3.forceCollide().radius(scaledCollideRadius).strength(1.0).iterations(2))
+      .alphaDecay(0.03) // Faster decay for quicker stabilization
+      .velocityDecay(0.7) // Higher value to reduce oscillation and improve stability
+      .alphaMin(0.005) // Higher minimum alpha for better stabilization
 
     if (components.length > 0) {
       if (components.length > 1) {
         const numComponents = components.length;
         const effectiveInterGraphDivisor = Math.max(1, interGraphCompactness);
-        const interGraphSpacingDivisor = effectiveInterGraphDivisor * 2;
-        const componentAnchorRadius = (Math.min(width, height) / interGraphSpacingDivisor) * (Math.log(numComponents + 1) || 1);
+        const interGraphSpacingDivisor = effectiveInterGraphDivisor * 1.5; // Reduced divisor for more separation
+        
+        // Increased minimum separation between components
+        const minComponentSeparation = 300; // Minimum distance between component centers
+        const componentAnchorRadius = Math.max(
+          minComponentSeparation,
+          (Math.min(width, height) / interGraphSpacingDivisor) * (Math.log(numComponents + 1) || 1)
+        );
+        
         const componentAnchors = components.map((_, i) => {
           const angle = (2 * Math.PI / components.length) * i;
           return { x: componentAnchorRadius * Math.cos(angle), y: componentAnchorRadius * Math.sin(angle) };
@@ -613,12 +636,54 @@ export default function MindMap({ initialGraphDataFromFolder, initialNodeId, map
         components.forEach((_componentNodes, i) => {
           const anchorX = componentAnchors[i].x;
           const anchorY = componentAnchors[i].y;
-          simulation.force(`anchorX-${i}`, d3.forceX<Node>(anchorX).strength(d => nodeToComponentIndex.get(d.id) === i ? 0.08 : 0));
-          simulation.force(`anchorY-${i}`, d3.forceY<Node>(anchorY).strength(d => nodeToComponentIndex.get(d.id) === i ? 0.08 : 0));
+          
+          // Stronger anchor forces to keep components separated
+          simulation.force(`anchorX-${i}`, d3.forceX<Node>(anchorX).strength(d => nodeToComponentIndex.get(d.id) === i ? 0.15 : 0));
+          simulation.force(`anchorY-${i}`, d3.forceY<Node>(anchorY).strength(d => nodeToComponentIndex.get(d.id) === i ? 0.15 : 0));
           simulation.force(`radial-${i}`, d3.forceRadial<Node>(
             (d) => (d.level * scaledMultiCompRadialLevelMultiplier) + scaledMultiCompRadialBaseOffset,
             anchorX, anchorY
           ).strength(d => nodeToComponentIndex.get(d.id) === i ? 0.95 : 0));
+        });
+
+        // Add inter-component repulsion force to prevent overlapping
+        simulation.force("componentRepulsion", () => {
+          for (let i = 0; i < components.length; i++) {
+            for (let j = i + 1; j < components.length; j++) {
+              const comp1Nodes = components[i];
+              const comp2Nodes = components[j];
+              const anchor1 = componentAnchors[i];
+              const anchor2 = componentAnchors[j];
+              
+              // Calculate distance between component centers
+              const dx = anchor2.x - anchor1.x;
+              const dy = anchor2.y - anchor1.y;
+              const distance = Math.sqrt(dx * dx + dy * dy);
+              
+              // Apply repulsion if components are too close
+              if (distance < minComponentSeparation * 1.5) {
+                const repulsionStrength = 0.02;
+                const normalizedDx = dx / distance;
+                const normalizedDy = dy / distance;
+                
+                // Push comp1 nodes away from comp2 center
+                comp1Nodes.forEach(node => {
+                  if (node.x !== undefined && node.y !== undefined) {
+                    node.vx = (node.vx || 0) - normalizedDx * repulsionStrength;
+                    node.vy = (node.vy || 0) - normalizedDy * repulsionStrength;
+                  }
+                });
+                
+                // Push comp2 nodes away from comp1 center
+                comp2Nodes.forEach(node => {
+                  if (node.x !== undefined && node.y !== undefined) {
+                    node.vx = (node.vx || 0) + normalizedDx * repulsionStrength;
+                    node.vy = (node.vy || 0) + normalizedDy * repulsionStrength;
+                  }
+                });
+              }
+            }
+          }
         });
       } else { // Single component
         simulation.force("center", d3.forceCenter(0, 0).strength(0.05));
@@ -630,6 +695,9 @@ export default function MindMap({ initialGraphDataFromFolder, initialNodeId, map
     
     if (graphData.nodes.length > 0 && processedLinks.filter(l => l.type === 'parent-child').length > 0) {
        simulation.force("siblingDistribution", createSiblingDistributionForce(graphData.nodes, processedLinks, 0.7, scaledSiblingDistForceIdealLinkDistance));
+       
+       // Add hierarchical force to ensure children are farther from root than parents
+       simulation.force("hierarchical", createHierarchicalForce(graphData.nodes, processedLinks, 0.8, scaledParentChildLinkDist * 0.8));
     }
 
     simulationRef.current = simulation;
@@ -702,11 +770,11 @@ export default function MindMap({ initialGraphDataFromFolder, initialNodeId, map
                 otherNode.y = (otherNode.y || 0) + Math.sin(randomAngle) * 0.1;
               }
               
-              const pushX = (dx / distance) * overlap * 0.5;
-              const pushY = (dy / distance) * overlap * 0.5;
+              const moveX = (dx / distance) * overlap * 0.6;
+              const moveY = (dy / distance) * overlap * 0.6;
         
-              otherNode.x = (otherNode.x || 0) + pushX;
-              otherNode.y = (otherNode.y || 0) + pushY;
+              otherNode.x = (otherNode.x || 0) + moveX;
+              otherNode.y = (otherNode.y || 0) + moveY;
             }
           });
         })
@@ -736,13 +804,83 @@ export default function MindMap({ initialGraphDataFromFolder, initialNodeId, map
 
     nodeElements.append("circle").attr("r", 11).attr("class", "node-base")
                  .attr("fill", (d_node: Node) => finalRootNodeIds.has(d_node.id) ? "white" : "transparent");
-    nodeElements.append("circle").attr("r", 8).attr("fill", (d_node: Node) => d_node.color || "#999");
+        nodeElements.append("circle").attr("r", 8).attr("fill", (d_node: Node) => d_node.color || "#999");
     
+    // Funktion zum Parsen von Markdown-Text und Anwenden der Styles
+    const parseMarkdownAndApplyStyles = (text: string, textStyle: Node['textStyle']) => {
+      // Basis-Styles aus textStyle
+      const baseFontSize = textStyle?.fontSize || BASE_SVG_FONT_SIZE;
+      let fontWeight = textStyle?.isBold ? "bold" : "normal";
+      let fontStyle = textStyle?.isItalic ? "italic" : "normal";
+      let textDecoration = [];
+      if (textStyle?.isUnderline) textDecoration.push("underline");
+      if (textStyle?.isStrikethrough) textDecoration.push("line-through");
+
+      // Markdown-Parsing für inline Formatierung
+      let displayText = text;
+      
+      // Bold: **text** -> fett
+      if (displayText.includes('**')) {
+        const boldMatch = displayText.match(/\*\*(.*?)\*\*/);
+        if (boldMatch) {
+          displayText = displayText.replace(/\*\*(.*?)\*\*/g, '$1');
+          fontWeight = "bold";
+        }
+      }
+      
+      // Italic: _text_ -> kursiv
+      if (displayText.includes('_') && !displayText.includes('__')) {
+        const italicMatch = displayText.match(/_(.*?)_/);
+        if (italicMatch) {
+          displayText = displayText.replace(/_(.*?)_/g, '$1');
+          fontStyle = "italic";
+        }
+      }
+      
+      // Underline: __text__ -> unterstrichen
+      if (displayText.includes('__')) {
+        const underlineMatch = displayText.match(/__(.*?)__/);
+        if (underlineMatch) {
+          displayText = displayText.replace(/__(.*?)__/g, '$1');
+          if (!textDecoration.includes("underline")) {
+            textDecoration.push("underline");
+          }
+        }
+      }
+      
+      // Strikethrough: ~~text~~ -> durchgestrichen
+      if (displayText.includes('~~')) {
+        const strikethroughMatch = displayText.match(/~~(.*?)~~/);
+        if (strikethroughMatch) {
+          displayText = displayText.replace(/~~(.*?)~~/g, '$1');
+          if (!textDecoration.includes("line-through")) {
+            textDecoration.push("line-through");
+          }
+        }
+      }
+
+      return {
+        text: displayText,
+        fontSize: baseFontSize,
+        fontWeight,
+        fontStyle,
+        textDecoration: textDecoration.join(" ")
+      };
+    };
+
     const textElements = nodeElements.append("text")
       .attr("dx", 0).attr("dy", 20).attr("text-anchor", "middle")
-      .text((d: Node) => d.name).attr("fill", "white")
+      .attr("fill", "white")
       .attr("font-family", "sans-serif")
-      .attr("font-size", `${BASE_SVG_FONT_SIZE}px`);
+      .each(function(d: Node) {
+        const styles = parseMarkdownAndApplyStyles(d.name, d.textStyle);
+        d3.select(this)
+          .text(styles.text)
+          .attr("font-size", `${styles.fontSize}px`)
+          .style("font-weight", styles.fontWeight)
+          .style("font-style", styles.fontStyle)
+          .style("text-decoration", styles.textDecoration);
+      });
     textSelectionRef.current = textElements;
 
     const findNodeUnderMouse = (event: any, transform: d3.ZoomTransform): string | null => {
@@ -813,88 +951,73 @@ export default function MindMap({ initialGraphDataFromFolder, initialNodeId, map
     simulation.alpha(0.5).restart();
 
     simulation.on("tick", () => {
+      // Einfache Regel: Knoten und Pfeile dürfen nicht die gleichen Koordinaten haben
+      // Für jeden Knoten
+      graphData.nodes.forEach(node => {
+        if (node.x === undefined || node.y === undefined || node.fx !== null || node.fy !== null) return;
+        
+        // Für jeden Link
+        graphData.links.forEach(link => {
+          const sourceId = typeof link.source === 'string' ? link.source : (link.source as Node).id;
+          const targetId = typeof link.target === 'string' ? link.target : (link.target as Node).id;
+          
+          // Überspringen, wenn dieser Knoten Teil des Links ist
+          if (node.id === sourceId || node.id === targetId) return;
+          
+          // Source und Target Knoten holen
+          const sourceNode = typeof link.source === 'string' 
+            ? graphData.nodes.find(n => n.id === link.source) 
+            : link.source as Node;
+          const targetNode = typeof link.target === 'string' 
+            ? graphData.nodes.find(n => n.id === link.target) 
+            : link.target as Node;
+          
+          // Überspringen, wenn Source oder Target nicht definiert sind oder keine Position haben
+          if (!sourceNode || !targetNode || 
+              sourceNode.x === undefined || sourceNode.y === undefined || 
+              targetNode.x === undefined || targetNode.y === undefined) return;
+          
+          // Berechne den Punkt auf der Linie zwischen Source und Target
+          const totalPoints = 10; // Anzahl der zu prüfenden Punkte entlang der Linie
+          
+          for (let i = 1; i < totalPoints - 1; i++) { // Endpunkte überspringen
+            const t = i / totalPoints; // Position entlang der Linie (0-1)
+            
+            // Punkt auf der Linie
+            const pointX = sourceNode.x + t * (targetNode.x - sourceNode.x);
+            const pointY = sourceNode.y + t * (targetNode.y - sourceNode.y);
+            
+            // Abstand zwischen Knoten und Punkt auf der Linie
+            const dx = (node.x || 0) - pointX;
+            const dy = (node.y || 0) - pointY;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            
+            // Wenn der Knoten zu nahe am Pfeil ist (weniger als Knotenradius)
+            if (distance < scaledCollideRadius) {
+              // Berechne eine neue Position für den Knoten, die vom Pfeil weg zeigt
+              const angle = Math.atan2(dy, dx);
+              const moveDistance = scaledCollideRadius - distance + 2; // Etwas mehr als nötig
+              
+              // Bewege den Knoten direkt weg vom Pfeil
+              node.x = (node.x || 0) + Math.cos(angle) * moveDistance;
+              node.y = (node.y || 0) + Math.sin(angle) * moveDistance;
+              
+              // Keine weitere Überprüfung für diesen Link nötig
+              break;
+            }
+          }
+        });
+      });
+      
+      // Update link positions
       linkElements
         .attr("x1", (d) => (typeof d.source === "string" ? 0 : (d.source as Node).x || 0))
         .attr("y1", (d) => (typeof d.source === "string" ? 0 : (d.source as Node).y || 0))
         .attr("x2", (d) => (typeof d.target === "string" ? 0 : (d.target as Node).x || 0))
         .attr("y2", (d) => (typeof d.target === "string" ? 0 : (d.target as Node).y || 0))
 
+      // Update node positions
       nodeElements.attr("transform", (d: Node) => `translate(${d.x || 0},${d.y || 0})`)
-
-      // New: Enforce hierarchical distance rule
-      const componentCenters = new Map<number, { x: number; y: number }>();
-      if (components.length > 1) {
-        components.forEach((_, i) => {
-          // Use the anchor points calculated for multi-component layout
-          const anchorXForce = simulationRef.current?.force<d3.ForceX<Node>>(`anchorX-${i}`);
-          const anchorYForce = simulationRef.current?.force<d3.ForceY<Node>>(`anchorY-${i}`);
-          if (anchorXForce && anchorYForce) {
-            // @ts-ignore // D3 types might not directly expose x() and y() for all force types
-            componentCenters.set(i, { x: anchorXForce.x(), y: anchorYForce.y() });
-          }
-        });
-      } else {
-        // Single component, center is (0,0) due to forceCenter
-        if (components.length === 1) componentCenters.set(0, { x: 0, y: 0 });
-      }
-
-      processedLinks.forEach(link => {
-        if (link.type === "parent-child") {
-          const parent = link.source as Node;
-          const child = link.target as Node;
-
-          if (!parent.x || !parent.y || !child.x || !child.y) return; // Skip if positions are not defined
-          
-          const componentIndex = nodeToComponentIndex.get(parent.id);
-          if (componentIndex === undefined) return;
-
-          const center = componentCenters.get(componentIndex);
-          if (!center) return;
-
-          const distParentSq = (parent.x - center.x) ** 2 + (parent.y - center.y) ** 2;
-          const distChildSq = (child.x - center.x) ** 2 + (child.y - center.y) ** 2;
-
-          if (distChildSq <= distParentSq) {
-            const vecX = child.x - parent.x;
-            const vecY = child.y - parent.y;
-            const vecMag = Math.sqrt(vecX ** 2 + vecY ** 2);
-            const slightPushFactor = 1.05; // Push child slightly further than parent
-            const parentDist = Math.sqrt(distParentSq);
-
-            if (vecMag > 0.001) { // Avoid division by zero if parent and child are at the same spot
-                const desiredChildDist = parentDist * slightPushFactor;
-                // Calculate child's new position relative to the center
-                const dirToParentX = parent.x - center.x;
-                const dirToParentY = parent.y - center.y;
-                const dirToParentMag = Math.sqrt(dirToParentX**2 + dirToParentY**2);
-
-                if (dirToParentMag > 0.001) {
-                    // Position child along the line from center through parent, but further out
-                    const newChildX = center.x + (dirToParentX / dirToParentMag) * desiredChildDist;
-                    const newChildY = center.y + (dirToParentY / dirToParentMag) * desiredChildDist;
-                    
-                    // Nudge child slightly further along parent-child vector as well for stability
-                    const nudgeFactor = 0.1; // Small nudge
-                    child.x = newChildX + (vecX / vecMag) * nudgeFactor;
-                    child.y = newChildY + (vecY / vecMag) * nudgeFactor;
-
-                } else {
-                    // Parent is at the center, push child out along parent-child vector
-                    child.x = parent.x + (vecX / vecMag) * (parentDist * slightPushFactor - parentDist + 5); // Ensure it's further
-                    child.y = parent.y + (vecY / vecMag) * (parentDist * slightPushFactor - parentDist + 5);
-                }
-            } else {
-                 // Parent and child are at the same spot, push child away from parent slightly
-                 // This case should ideally be handled by collide force, but as a fallback:
-                 child.x = parent.x + (Math.random() - 0.5) * 5; 
-                 child.y = parent.y + (Math.random() - 0.5) * 5; 
-            }
-            // If node positions are fixed (fx, fy), this direct manipulation might conflict.
-            // Consider only applying if fx/fy are not set, or unsetting them.
-             child.fx = null; child.fy = null; // Ensure forces can continue to act on it after adjustment
-          }
-        }
-      });
     })
 
     const handleResize = () => {
@@ -906,7 +1029,12 @@ export default function MindMap({ initialGraphDataFromFolder, initialNodeId, map
             const updatedNumComponents = components.length;
             if (updatedNumComponents > 1) {
                 const effectiveInterGraphDivisorResize = Math.max(1, interGraphCompactness);
-                const updatedComponentAnchorRadius = (Math.min(newWidth, newHeight) / effectiveInterGraphDivisorResize) * (Math.log(updatedNumComponents + 1) || 1);
+                const interGraphSpacingDivisor = effectiveInterGraphDivisorResize * 1.5;
+                const minComponentSeparation = 300; // Same as in main setup
+                const updatedComponentAnchorRadius = Math.max(
+                  minComponentSeparation,
+                  (Math.min(newWidth, newHeight) / interGraphSpacingDivisor) * (Math.log(updatedNumComponents + 1) || 1)
+                );
                 const updatedComponentAnchors = components.map((_, k) => {
                     const angle = (2 * Math.PI / updatedNumComponents) * k;
                     return {
@@ -1094,21 +1222,91 @@ export default function MindMap({ initialGraphDataFromFolder, initialNodeId, map
         return (isHoverEnabled && currentHoverId && (sourceId === currentHoverId || targetId === currentHoverId)) ? "url(#triangle-purple)" : "url(#triangle-default)";
       });
 
-    textsSel.attr("font-size", (d_text: Node) => 
-        (isHoverEnabled && currentHoverId && directlyConnectedToHovered.has(d_text.id)) ? `${fixedHighlightedFontSize}px` : `${BASE_SVG_FONT_SIZE}px`
-      )
-      .style("opacity", (d_text: Node) => {
-        if (isHoverEnabled && currentHoverId) {
-          if (directlyConnectedToHovered.has(d_text.id)) {
-            return 1.0; 
-          } else {
-            return OTHER_NODE_TEXT_OPACITY_ON_HOVER; 
+    textsSel.each(function(d_text: Node) {
+        const element = d3.select(this);
+        
+        // Markdown-Parsing für Hover-Effekte verwenden
+        const parseMarkdownForHover = (text: string, textStyle: Node['textStyle']) => {
+          const baseFontSize = textStyle?.fontSize || BASE_SVG_FONT_SIZE;
+          let fontWeight = textStyle?.isBold ? "bold" : "normal";
+          let fontStyle = textStyle?.isItalic ? "italic" : "normal";
+          let textDecoration = [];
+          if (textStyle?.isUnderline) textDecoration.push("underline");
+          if (textStyle?.isStrikethrough) textDecoration.push("line-through");
+
+          let displayText = text;
+          
+          // Bold: **text** -> fett
+          if (displayText.includes('**')) {
+            const boldMatch = displayText.match(/\*\*(.*?)\*\*/);
+            if (boldMatch) {
+              displayText = displayText.replace(/\*\*(.*?)\*\*/g, '$1');
+              fontWeight = "bold";
+            }
           }
-        } else { 
-          if (effectiveFontSizeBase >= FULLY_OPAQUE_EFFECTIVE_SIZE) return 1.0;
-          if (effectiveFontSizeBase <= INVISIBLE_EFFECTIVE_SIZE) return 0;
-          return d3.scaleLinear().domain([INVISIBLE_EFFECTIVE_SIZE, FULLY_OPAQUE_EFFECTIVE_SIZE]).range([0, 1.0]).clamp(true)(effectiveFontSizeBase);
-        }
+          
+          // Italic: _text_ -> kursiv
+          if (displayText.includes('_') && !displayText.includes('__')) {
+            const italicMatch = displayText.match(/_(.*?)_/);
+            if (italicMatch) {
+              displayText = displayText.replace(/_(.*?)_/g, '$1');
+              fontStyle = "italic";
+            }
+          }
+          
+          // Underline: __text__ -> unterstrichen
+          if (displayText.includes('__')) {
+            const underlineMatch = displayText.match(/__(.*?)__/);
+            if (underlineMatch) {
+              displayText = displayText.replace(/__(.*?)__/g, '$1');
+              if (!textDecoration.includes("underline")) {
+                textDecoration.push("underline");
+              }
+            }
+          }
+          
+          // Strikethrough: ~~text~~ -> durchgestrichen
+          if (displayText.includes('~~')) {
+            const strikethroughMatch = displayText.match(/~~(.*?)~~/);
+            if (strikethroughMatch) {
+              displayText = displayText.replace(/~~(.*?)~~/g, '$1');
+              if (!textDecoration.includes("line-through")) {
+                textDecoration.push("line-through");
+              }
+            }
+          }
+
+          return {
+            text: displayText,
+            fontSize: baseFontSize,
+            fontWeight,
+            fontStyle,
+            textDecoration: textDecoration.join(" ")
+          };
+        };
+
+        const styles = parseMarkdownForHover(d_text.name, d_text.textStyle);
+        const fontSize = (isHoverEnabled && currentHoverId && directlyConnectedToHovered.has(d_text.id)) ? fixedHighlightedFontSize : styles.fontSize;
+        
+        element
+          .text(styles.text)
+          .attr("font-size", `${fontSize}px`)
+          .style("font-weight", styles.fontWeight)
+          .style("font-style", styles.fontStyle)
+          .style("text-decoration", styles.textDecoration)
+          .style("opacity", () => {
+            if (isHoverEnabled && currentHoverId) {
+              if (directlyConnectedToHovered.has(d_text.id)) {
+                return 1.0; 
+              } else {
+                return OTHER_NODE_TEXT_OPACITY_ON_HOVER; 
+              }
+            } else { 
+              if (effectiveFontSizeBase >= FULLY_OPAQUE_EFFECTIVE_SIZE) return 1.0;
+              if (effectiveFontSizeBase <= INVISIBLE_EFFECTIVE_SIZE) return 0;
+              return d3.scaleLinear().domain([INVISIBLE_EFFECTIVE_SIZE, FULLY_OPAQUE_EFFECTIVE_SIZE]).range([0, 1.0]).clamp(true)(effectiveFontSizeBase);
+            }
+          });
       });
   };
 
@@ -1179,6 +1377,7 @@ export default function MindMap({ initialGraphDataFromFolder, initialNodeId, map
           onNameChange={(newName) => updateNodeName(editingNode.id, newName)}
           onClose={() => setEditingNode(null)}
           onDeleteRelationship={(type, targetName) => deleteRelationship(editingNode.id, type, targetName)}
+          onTextStyleChange={(textStyle) => updateNodeTextStyle(editingNode.id, textStyle)}
         />
       )}
 

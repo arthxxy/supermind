@@ -3,10 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
+    "dev": "pnpm run clean && next dev",
+    "clean": "rimraf .next",
+    "build": "pnpm run clean && next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "fresh": "pnpm run clean && pnpm install && pnpm run dev"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",
@@ -38,6 +40,7 @@
     "@radix-ui/react-toggle-group": "1.1.1",
     "@radix-ui/react-tooltip": "1.1.6",
     "@types/d3": "^7.4.3",
+    "@types/uuid": "^10.0.0",
     "autoprefixer": "^10.4.20",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -46,9 +49,10 @@
     "date-fns": "^2.28.0",
     "embla-carousel-react": "8.5.1",
     "input-otp": "1.4.1",
-    "lucide-react": "^0.454.0",
-    "next": "^14.2.3",
+    "lucide-react": "^0.525.0",
+    "next": "^13.5.6",
     "next-themes": "^0.4.4",
+    "pdfjs-dist": "^5.3.93",
     "react": "^18.2.0",
     "react-day-picker": "8.10.1",
     "react-dom": "^18.2.0",
@@ -59,6 +63,7 @@
     "sonner": "^1.7.1",
     "tailwind-merge": "^2.5.5",
     "tailwindcss-animate": "^1.0.7",
+    "uuid": "^11.1.0",
     "vaul": "^0.9.6",
     "zod": "^3.24.1"
   },
@@ -69,6 +74,7 @@
     "@types/react": "^18.2.0",
     "@types/react-dom": "^18.2.0",
     "postcss": "^8",
+    "rimraf": "^6.0.1",
     "tailwindcss": "^3.4.17",
     "typescript": "^5"
   }
