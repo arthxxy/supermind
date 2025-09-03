@@ -4,27 +4,10 @@ import { useState, useEffect, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
-import { ChevronUp, ChevronDown } from "lucide-react"
+import { ChevronUp, ChevronDown, ChevronRight, List } from "lucide-react"
+import type { Node, Section, Relationship } from "@/lib/types"
 
-interface Relationship {
-  type: "parent" | "child" | "friend"
-  targetId: string
-  targetName: string
-}
 
-interface Node {
-  id: string
-  name: string
-  level: number
-  content?: string
-  textStyle?: {
-    fontSize?: number;
-    isBold?: boolean;
-    isItalic?: boolean;
-    isUnderline?: boolean;
-    isStrikethrough?: boolean;
-  };
-}
 
 interface MarkdownEditorProps {
   node: Node
@@ -37,6 +20,7 @@ interface MarkdownEditorProps {
   onClose: () => void
   onDeleteRelationship: (type: string, targetName: string) => void
   onTextStyleChange?: (textStyle: Node['textStyle']) => void
+  onSectionsChange?: (sections: Section[]) => void
 }
 
 export function MarkdownEditor({
@@ -50,6 +34,7 @@ export function MarkdownEditor({
   onClose,
   onDeleteRelationship,
   onTextStyleChange,
+  onSectionsChange,
 }: MarkdownEditorProps) {
   const [isExistingRelationshipsVisible, setIsExistingRelationshipsVisible] = useState(false)
   const [content, setContent] = useState(node.content || "")
@@ -64,6 +49,8 @@ export function MarkdownEditor({
   })
   const [selectionStart, setSelectionStart] = useState<number>(0)
   const [selectionEnd, setSelectionEnd] = useState<number>(0)
+  const [showSectionLevels, setShowSectionLevels] = useState<boolean>(false)
+  const [sections, setSections] = useState<Section[]>(node.sections || [])
   const nameInputRef = useRef<HTMLInputElement>(null)
   const newRelationInputRef = useRef<HTMLInputElement>(null)
   const contentTextareaRef = useRef<HTMLDivElement>(null)
@@ -139,7 +126,32 @@ export function MarkdownEditor({
   // Funktion zum Rendern von Markdown zu HTML
   const renderMarkdown = (text: string): string => {
     let html = text
-      // Escape HTML first
+      // First handle section markers BEFORE escaping HTML
+      .replace(
+        /\[SECTION:([^:]+):([^:]+):([^\]]+)\][\s\S]*?(.*?)[\s\S]*?\[\/SECTION\]/g,
+        (match, sectionId, sectionNumber, sectionTitle, sectionContent) => {
+          const section = sections.find(s => s.id === sectionId);
+          const isCollapsed = section?.isCollapsed || false;
+          const displayStyle = isCollapsed ? 'style="display: none"' : '';
+          const iconPath = isCollapsed ? 'M9 5l7 7-7 7' : 'M19 9l-7 7-7-7';
+          
+          return `<div class="section-marker" data-section-id="${sectionId}">
+            <div class="section-header bg-zinc-600 p-2 rounded cursor-pointer flex items-center gap-2">
+              <button class="section-toggle">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="${iconPath}"></path>
+                </svg>
+              </button>
+              <span class="section-number font-medium">${sectionNumber}</span>
+              <span class="section-title">${sectionTitle}</span>
+            </div>
+            <div class="section-content ml-6 mt-2 p-2 border-l-2 border-zinc-500" contenteditable="true" ${displayStyle}>
+              ${sectionContent}
+            </div>
+          </div>`;
+        }
+      )
+      // Escape HTML after handling sections
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
@@ -153,6 +165,17 @@ export function MarkdownEditor({
       .replace(/__([^_]+)__/g, '<u>$1</u>')
       // Strikethrough: ~~text~~ -> <s>text</s>
       .replace(/~~([^~]+)~~/g, '<s>$1</s>')
+    
+    // Re-unescape HTML for section markers (they need to render as HTML)
+    html = html.replace(
+      /&lt;div class="section-marker"[^&]*&gt;[\s\S]*?&lt;\/div&gt;/g,
+      (match) => {
+        return match
+          .replace(/&lt;/g, '<')
+          .replace(/&gt;/g, '>')
+          .replace(/&amp;/g, '&');
+      }
+    );
     
     return html
   }
@@ -298,6 +321,204 @@ export function MarkdownEditor({
     }
   }
 
+  // Section management functions
+  const getSelectedText = (): string => {
+    const selection = window.getSelection()
+    if (selection && selection.rangeCount > 0) {
+      return selection.toString().trim()
+    }
+    return ""
+  }
+
+  const generateSectionNumber = (level: number, existingSections: Section[]): string => {
+    if (level === 1) {
+      // Count existing level-1 sections
+      const level1Count = existingSections.filter(s => s.level === 1).length
+      return `${level1Count + 1}.`
+    } else if (level === 2) {
+      // Find the last level-1 section and count its subsections
+      const lastLevel1 = existingSections.filter(s => s.level === 1).pop()
+      if (lastLevel1) {
+        const subsectionCount = existingSections.filter(s => s.level === 2 && s.number.startsWith(lastLevel1.number)).length
+        return `${lastLevel1.number.slice(0, -1)}.${subsectionCount + 1}`
+      }
+      return "1.1"
+    } else if (level === 3) {
+      // Find the last level-2 section and count its subsections
+      const level2Sections = existingSections.filter(s => s.level === 2)
+      const lastLevel2 = level2Sections.pop()
+      if (lastLevel2) {
+        const subsectionCount = existingSections.filter(s => s.level === 3 && s.number.startsWith(lastLevel2.number)).length
+        return `${lastLevel2.number}.${subsectionCount + 1}`
+      }
+      return "1.1.1"
+    } else {
+      // For levels beyond 3, extend the pattern
+      const higherLevelSections = existingSections.filter(s => s.level === level - 1)
+      const lastParentSection = higherLevelSections.pop()
+      if (lastParentSection) {
+        const subsectionCount = existingSections.filter(s => s.level === level && s.number.startsWith(lastParentSection.number)).length
+        return `${lastParentSection.number}.${subsectionCount + 1}`
+      }
+      return "1." + ".1".repeat(level - 1)
+    }
+  }
+
+  const createSection = (level: number, title: string): void => {
+    const selectedText = getSelectedText()
+    if (!selectedText) {
+      alert("Bitte markieren Sie zuerst den Text, der als Abschnittstitel verwendet werden soll.")
+      return
+    }
+
+    const sectionId = `section-${Date.now()}`
+    const sectionNumber = generateSectionNumber(level, sections)
+
+    const newSection: Section = {
+      id: sectionId,
+      title: selectedText,
+      level: level,
+      number: sectionNumber,
+      content: "",
+      isCollapsed: false,
+      subsections: []
+    }
+
+    setSections(prev => [...prev, newSection])
+    setShowSectionLevels(false)
+
+    // Remove selected text from content and replace with section marker
+    if (contentTextareaRef.current) {
+      const selection = window.getSelection()
+      if (selection && selection.rangeCount > 0) {
+        const range = selection.getRangeAt(0)
+        
+        // Get all content after the selected text to handle content boundaries
+        const parentElement = range.commonAncestorContainer.nodeType === Node.TEXT_NODE 
+          ? range.commonAncestorContainer.parentElement 
+          : range.commonAncestorContainer as Element;
+        
+        const afterSelectionRange = document.createRange();
+        afterSelectionRange.setStart(range.endContainer, range.endOffset);
+        afterSelectionRange.setEndAfter(contentTextareaRef.current.lastChild || contentTextareaRef.current);
+        
+        const afterContent = afterSelectionRange.extractContents();
+        
+        // Clear the selection and prepare for section insertion
+        range.deleteContents()
+        
+        // Insert section marker
+        const sectionMarker = document.createElement('div')
+        sectionMarker.className = 'section-marker'
+        sectionMarker.dataset.sectionId = sectionId
+        sectionMarker.innerHTML = `
+          <div class="section-header bg-zinc-600 p-2 rounded cursor-pointer flex items-center gap-2">
+            <button class="section-toggle">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+              </svg>
+            </button>
+            <span class="section-number font-medium">${sectionNumber}</span>
+            <span class="section-title">${selectedText}</span>
+          </div>
+          <div class="section-content ml-6 mt-2 p-2 border-l-2 border-zinc-500" contenteditable="true">
+            <span class="text-zinc-400 italic">Inhalt des Abschnitts hier eingeben...</span>
+          </div>
+        `
+        range.insertNode(sectionMarker)
+        
+        // Insert a divider and the remaining content after the section
+        if (afterContent.hasChildNodes()) {
+          const divider = document.createElement('div');
+          divider.className = 'section-divider';
+          divider.innerHTML = '<br>';
+          
+          const afterContentDiv = document.createElement('div');
+          afterContentDiv.className = 'content-after-section';
+          afterContentDiv.appendChild(afterContent);
+          
+          sectionMarker.after(divider);
+          divider.after(afterContentDiv);
+        }
+        
+        // Update content state
+        isInternalUpdate.current = true
+        const html = contentTextareaRef.current.innerHTML
+        const markdown = htmlToMarkdown(html)
+        handleContentChange(markdown)
+      }
+    }
+  }
+
+  const toggleSectionCollapse = (sectionId: string): void => {
+    setSections(prev => prev.map(section => 
+      section.id === sectionId 
+        ? { ...section, isCollapsed: !section.isCollapsed }
+        : section
+    ))
+  }
+
+  // Handle section-related click events with proper event delegation
+  useEffect(() => {
+    const handleSectionClick = (e: Event) => {
+      const target = e.target as HTMLElement;
+      const toggleButton = target.closest('.section-toggle');
+      
+      if (toggleButton && contentTextareaRef.current?.contains(toggleButton)) {
+        e.preventDefault();
+        e.stopPropagation();
+        
+        const sectionMarker = toggleButton.closest('.section-marker') as HTMLElement;
+        if (sectionMarker && sectionMarker.dataset.sectionId) {
+          const sectionId = sectionMarker.dataset.sectionId;
+          const sectionContent = sectionMarker.querySelector('.section-content') as HTMLElement;
+          const toggleIcon = toggleButton.querySelector('svg path') as SVGPathElement;
+          
+          if (sectionContent && toggleIcon) {
+            const isCollapsed = sectionContent.style.display === 'none';
+            sectionContent.style.display = isCollapsed ? 'block' : 'none';
+            
+            // Update icon rotation
+            if (isCollapsed) {
+              toggleIcon.setAttribute('d', 'M19 9l-7 7-7-7'); // Down arrow
+            } else {
+              toggleIcon.setAttribute('d', 'M9 5l7 7-7 7'); // Right arrow
+            }
+            
+            toggleSectionCollapse(sectionId);
+          }
+        }
+      }
+    };
+
+    document.addEventListener('click', handleSectionClick);
+    return () => {
+      document.removeEventListener('click', handleSectionClick);
+    };
+  }, []);
+
+  // Close section level dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: Event) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('.relative')) {
+        setShowSectionLevels(false);
+      }
+    };
+
+    if (showSectionLevels) {
+      document.addEventListener('click', handleClickOutside);
+      return () => {
+        document.removeEventListener('click', handleClickOutside);
+      };
+    }
+  }, [showSectionLevels]);
+
+  // Save sections changes to parent component
+  useEffect(() => {
+    onSectionsChange?.(sections);
+  }, [sections, onSectionsChange]);
+
   // Filter recommendations for relationship input
   const command = newRelation.charAt(0)
   const namePart = newRelation.slice(1).trim().toLowerCase()
@@ -309,8 +530,55 @@ export function MarkdownEditor({
     : []
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="fixed inset-4 bg-zinc-900 rounded-lg shadow-2xl border border-zinc-700 flex flex-col overflow-hidden z-50 md:inset-8 lg:inset-12">
+    <>
+      <style jsx>{`
+        .section-marker {
+          margin: 8px 0;
+          border-radius: 6px;
+          overflow: hidden;
+        }
+        .section-header {
+          transition: background-color 0.2s;
+        }
+        .section-header:hover {
+          background-color: rgb(82 82 91) !important;
+        }
+        .section-toggle {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: none;
+          border: none;
+          color: inherit;
+          cursor: pointer;
+          transition: transform 0.2s;
+        }
+        .section-toggle:hover {
+          transform: scale(1.1);
+        }
+        .section-content {
+          transition: all 0.3s ease-in-out;
+          border-left: 2px solid rgb(113 113 122);
+        }
+        .section-content[style*="display: none"] {
+          max-height: 0;
+          padding: 0 !important;
+          margin: 0 !important;
+          overflow: hidden;
+        }
+        .section-content:focus {
+          outline: 2px solid rgb(59 130 246);
+          outline-offset: 2px;
+        }
+        .content-after-section {
+          margin-top: 16px;
+        }
+        .section-divider {
+          height: 8px;
+        }
+      `}</style>
+      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+        <div className="fixed inset-4 bg-zinc-900 rounded-lg shadow-2xl border border-zinc-700 flex flex-col overflow-hidden z-50 md:inset-8 lg:inset-12">
         <div className="flex flex-col p-4 border-b border-zinc-700 gap-2">
           <Input
             ref={nameInputRef}
@@ -380,6 +648,61 @@ export function MarkdownEditor({
               >
                 S
               </Button>
+              <div className="relative">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onMouseDown={(e) => {
+                    e.preventDefault()
+                    setShowSectionLevels(!showSectionLevels)
+                  }}
+                  className="h-8 px-2 flex items-center gap-1"
+                >
+                  <List className="w-4 h-4" />
+                  Abschnitt
+                </Button>
+                {showSectionLevels && (
+                  <div className="absolute top-full left-0 mt-1 bg-zinc-800 border border-zinc-700 rounded shadow-lg z-30 p-2 flex flex-col gap-1 min-w-[120px]">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => createSection(1, "")}
+                      className="justify-start text-xs"
+                    >
+                      1.
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => createSection(2, "")}
+                      className="justify-start text-xs"
+                    >
+                      1.1
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => createSection(3, "")}
+                      className="justify-start text-xs"
+                    >
+                      1.1.1
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        const customLevel = prompt("Ebene eingeben (z.B. 4 für 1.1.1.1):", "4")
+                        if (customLevel && !isNaN(parseInt(customLevel))) {
+                          createSection(parseInt(customLevel), "")
+                        }
+                      }}
+                      className="justify-start text-xs"
+                    >
+                      1.1.1.x
+                    </Button>
+                  </div>
+                )}
+              </div>
             </div>
             <div className="flex items-center gap-2 ml-auto">
               <Button
@@ -474,8 +797,9 @@ export function MarkdownEditor({
             </div>
           </div>
         </div>
+        </div>
       </div>
-    </div>
+    </>
   )
 } 
 
@@ -483,6 +807,33 @@ export function MarkdownEditor({
 
 function htmlToMarkdown(html: string): string {
   let md = html;
+  
+  // Handle section markers - convert them to a special markdown syntax
+  md = md.replace(
+    /<div[^>]*class="[^"]*section-marker[^"]*"[^>]*data-section-id="([^"]*)"[^>]*>([\s\S]*?)<\/div>/gi,
+    (match, sectionId, content) => {
+      // Extract section number and title from the header
+      const headerMatch = content.match(
+        /<span[^>]*class="[^"]*section-number[^"]*"[^>]*>([^<]*)<\/span>[\s\S]*?<span[^>]*class="[^"]*section-title[^"]*"[^>]*>([^<]*)<\/span>/i
+      );
+      
+      if (headerMatch) {
+        const sectionNumber = headerMatch[1];
+        const sectionTitle = headerMatch[2];
+        
+        // Extract section content
+        const contentMatch = content.match(
+          /<div[^>]*class="[^"]*section-content[^"]*"[^>]*[^>]*>([\s\S]*?)<\/div>/i
+        );
+        const sectionContent = contentMatch ? contentMatch[1] : '';
+        
+        // Return as markdown section
+        return `\n\n[SECTION:${sectionId}:${sectionNumber}:${sectionTitle}]\n${sectionContent}\n[/SECTION]\n\n`;
+      }
+      return match;
+    }
+  );
+  
   md = md.replace(/<br\s*\/?>(\s*)/gi, '\n');
   md = md.replace(/&nbsp;/gi, ' ');
   md = md.replace(/<strong>(.*?)<\/strong>/gi, '**$1**');

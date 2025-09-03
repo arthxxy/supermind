@@ -3,7 +3,7 @@
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
 import { useRef, ChangeEvent, useState } from "react";
-import MindMap from "@/components/mind-map";
+import MindMapTree from "@/components/mind-map-tree";
 
 interface MindMapNode {
   id: string;
@@ -224,7 +224,7 @@ export default function OverviewPage() {
     };
     return (
       <main className="w-screen h-screen min-h-0 min-w-0 overflow-hidden">
-        <MindMap initialGraphDataFromFolder={graphDataForMindMap} />
+        <MindMapTree initialGraphDataFromFolder={graphDataForMindMap} />
         <Button 
           onClick={() => setMindMapData(null)} 
           className="absolute top-4 left-4 z-20 bg-slate-700 hover:bg-slate-600 text-white"

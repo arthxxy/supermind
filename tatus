@@ -1,0 +1,10 @@
+[33m404fe09[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m Update pnpm-lock.yaml to match package.json
+[33mb075d3b[m Fix cursor focus issues and restore mind map functionality
+[33mc620724[m Fix friend relationship handling: ensure friend nodes are not treated as root nodes and position them closer to their connected friends
+[33mf09b532[m feat(mind-map): improve node dragging stability
+[33m1630a24[m Fix: Handle mobile send button for new relationships
+[33m070b6e0[m Update mind map component and related functionalities
+[33ma007993[m Fix: Improve default text visibility for outline buttons
+[33m4212359[m Ensure correct props and Suspense for NewMindMapPage
+[33m5cf8da3[m Explicitly type MindMapPage return as JSX.Element
+[33m2cc2633[m Downgrade Next.js to ^14.2.3

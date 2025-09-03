@@ -2,7 +2,7 @@
 
 import { useEffect, Suspense } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
-import MindMap from "@/components/mind-map-original"
+import MindMapTree from "@/components/mind-map-tree"
 
 interface Node {
   id: string
@@ -74,7 +74,7 @@ function MindMapRenderer() {
 
   const initialData = type === "quick-note" ? quickNoteData : newMindMapData
 
-  return <MindMap initialGraphDataFromFolder={initialData} />
+  return <MindMapTree initialGraphDataFromFolder={initialData} />
 }
 
 export default function NewMindMapPage() {

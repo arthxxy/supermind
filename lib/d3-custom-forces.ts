@@ -6,7 +6,8 @@ export function createSiblingDistributionForce(
   initialNodes: Node[],
   initialLinks: Link[],
   strengthVal: number,
-  idealLinkDistanceVal: number
+  idealLinkDistanceVal: number,
+  rootNodeIds?: Set<string>
 ): d3.Force<Node, Link> {
   let nodes: Node[] = [];
   let links: Link[] = []; // All links
@@ -14,6 +15,7 @@ export function createSiblingDistributionForce(
   let nodesMap: Map<string, Node> = new Map();
   let strength = strengthVal;
   let idealLinkDistance = idealLinkDistanceVal;
+  let rootNodes: Set<string> = rootNodeIds || new Set();
   
   // Pre-compute parent-child relationships once
   let childrenByParent: Map<string, Node[]> = new Map();
@@ -24,13 +26,25 @@ export function createSiblingDistributionForce(
     // Apply sibling distribution force
     childrenByParent.forEach((children, parentId) => {
       const parentNode = nodesMap.get(parentId);
-      if (!parentNode || children.length <= 1 || parentNode.x === undefined || parentNode.y === undefined) {
+      if (!parentNode || parentNode.x === undefined || parentNode.y === undefined) {
+        return;
+      }
+      
+      // For root nodes, start distributing children in a circle from 2 children onwards
+      // For non-root nodes, keep the original behavior (only distribute if more than 1 child)
+      const isRootNode = rootNodes.has(parentId);
+      const minimumChildrenForDistribution = isRootNode ? 2 : 2; // Changed: both start at 2 now
+      
+      if (children.length < minimumChildrenForDistribution) {
         return;
       }
 
       // Calculate the angle step for evenly distributing children
       const angleStep = (2 * Math.PI) / children.length;
       const scaledStrength = strength * alpha;
+
+      // For root nodes, use a larger radius to give children more space for 360° distribution
+      const distributionRadius = isRootNode ? idealLinkDistance * 1.8 : idealLinkDistance;
 
       // Apply forces to position children in a circle around parent
       children.forEach((child, i) => {
@@ -42,8 +56,8 @@ export function createSiblingDistributionForce(
 
         // Calculate target position in a circle around parent
         const angle = i * angleStep;
-        const targetX = parentNode.x! + idealLinkDistance * Math.cos(angle);
-        const targetY = parentNode.y! + idealLinkDistance * Math.sin(angle);
+        const targetX = parentNode.x! + distributionRadius * Math.cos(angle);
+        const targetY = parentNode.y! + distributionRadius * Math.sin(angle);
 
         // Apply force toward target position
         child.vx = (child.vx || 0) + (targetX - child.x!) * scaledStrength;
@@ -128,6 +142,12 @@ export function createSiblingDistributionForce(
     return force;
   };
 
+  force.rootNodes = function(_rootNodes?: Set<string>) {
+    if (_rootNodes === undefined) return rootNodes;
+    rootNodes = _rootNodes;
+    return force;
+  };
+
   links = initialLinks;
   parentChildLinks = initialLinks.filter(link => link.type === 'parent-child');
   if (initialNodes) {
@@ -156,7 +176,8 @@ export function createHierarchicalForce(
   initialNodes: Node[],
   initialLinks: Link[],
   strengthVal: number,
-  levelDistanceVal: number
+  levelDistanceVal: number,
+  rootNodeIds?: Set<string>
 ): d3.Force<Node, Link> {
   let nodes: Node[] = [];
   let links: Link[] = [];
@@ -164,6 +185,7 @@ export function createHierarchicalForce(
   let nodesMap: Map<string, Node> = new Map();
   let strength = strengthVal;
   let levelDistance = levelDistanceVal;
+  let identifiedRootNodes: Set<string> = rootNodeIds || new Set();
   
   // Pre-computed data structures for better performance
   let rootNodes: Node[] = [];
@@ -183,31 +205,40 @@ export function createHierarchicalForce(
     distanceFromRoot = new Map<string, number>();
     siblingPositions = new Map<string, {angle: number, totalSiblings: number}>();
     
-    // First, identify root nodes (nodes with no parents)
-    parentChildLinks.forEach(link => {
-      const targetId = typeof link.target === 'string' ? link.target : (link.target as Node).id;
-      childNodes.add(targetId);
-    });
-    
-    nodes.forEach(node => {
-      if (!childNodes.has(node.id)) {
-        rootNodes.push(node);
-      }
-    });
-    
-    // If no root nodes found, use the node with the lowest level as root
-    if (rootNodes.length === 0 && nodes.length > 0) {
-      let lowestLevel = Infinity;
-      let lowestLevelNode = nodes[0];
+    // Use the provided root node IDs if available, otherwise fall back to automatic detection
+    if (identifiedRootNodes.size > 0) {
+      nodes.forEach(node => {
+        if (identifiedRootNodes.has(node.id)) {
+          rootNodes.push(node);
+        }
+      });
+    } else {
+      // Fallback: identify root nodes (nodes with no parents)
+      parentChildLinks.forEach(link => {
+        const targetId = typeof link.target === 'string' ? link.target : (link.target as Node).id;
+        childNodes.add(targetId);
+      });
       
       nodes.forEach(node => {
-        if (node.level < lowestLevel) {
-          lowestLevel = node.level;
-          lowestLevelNode = node;
+        if (!childNodes.has(node.id)) {
+          rootNodes.push(node);
         }
       });
       
-      rootNodes.push(lowestLevelNode);
+      // If no root nodes found, use the node with the lowest level as root
+      if (rootNodes.length === 0 && nodes.length > 0) {
+        let lowestLevel = Infinity;
+        let lowestLevelNode = nodes[0];
+        
+        nodes.forEach(node => {
+          if (node.level < lowestLevel) {
+            lowestLevel = node.level;
+            lowestLevelNode = node;
+          }
+        });
+        
+        rootNodes.push(lowestLevelNode);
+      }
     }
     
     // Build node hierarchy (parent -> children mapping)
@@ -299,9 +330,11 @@ export function createHierarchicalForce(
       let targetY = 0;
       
       if (nodeDepth === 1) {
-        // First level nodes distribute around center (0,0)
-        targetX = radius * Math.cos(angle);
-        targetY = radius * Math.sin(angle);
+        // First level nodes (direct children of root) distribute around center (0,0)
+        // Use a larger radius for root children to give them more space for 360° distribution
+        const rootChildRadius = radius * 1.5; // Increased spacing for root children
+        targetX = rootChildRadius * Math.cos(angle);
+        targetY = rootChildRadius * Math.sin(angle);
       } else {
         // Get grandparent position to maintain hierarchy direction
         const grandparentId = parentByChild.get(parentId);
@@ -334,9 +367,10 @@ export function createHierarchicalForce(
             targetY = parentNode.y + levelDistance * Math.sin(angle);
           }
         } else {
-          // Parent is a root node, distribute children in a circle
-          targetX = parentNode.x + levelDistance * Math.cos(angle);
-          targetY = parentNode.y + levelDistance * Math.sin(angle);
+          // Parent is a root node, distribute children in a circle with larger radius
+          const rootChildDistance = levelDistance * 1.5; // More space for root children
+          targetX = parentNode.x + rootChildDistance * Math.cos(angle);
+          targetY = parentNode.y + rootChildDistance * Math.sin(angle);
         }
       }
       
@@ -377,6 +411,13 @@ export function createHierarchicalForce(
   force.distance = function(_distance?: number) {
     if (_distance === undefined) return levelDistance;
     levelDistance = _distance;
+    return force;
+  };
+
+  force.rootNodes = function(_rootNodes?: Set<string>) {
+    if (_rootNodes === undefined) return identifiedRootNodes;
+    identifiedRootNodes = _rootNodes;
+    calculateHierarchy();
     return force;
   };
 
