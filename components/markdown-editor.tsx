@@ -587,7 +587,7 @@ export function MarkdownEditor({
             onSelect={handleSelectionChange}
             onMouseUp={handleSelectionChange}
             onKeyUp={handleSelectionChange}
-            className="bg-zinc-800 border-zinc-700 text-white placeholder:text-zinc-400 rounded-md px-3 h-10 w-64"
+            className="bg-zinc-800 border-zinc-700 text-white placeholder:text-zinc-400 rounded-md px-3 h-10 w-full max-w-4xl"
           />
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2">

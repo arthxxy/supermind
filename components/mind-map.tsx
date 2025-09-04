@@ -279,6 +279,69 @@ export default function MindMap({ initialGraphDataFromFolder, initialNodeId, map
     }));
   };
 
+  // Function to update a relationship
+  const updateRelationship = (nodeId: string, oldType: string, newCommand: string, targetName: string) => {
+    const oldRelationships = getNodeRelationships(nodeId)
+    const oldRelationship = oldRelationships.find((r: Relationship) => 
+      r.type === oldType && 
+      graphData.nodes.find((n: Node) => n.id === r.targetId)?.name === targetName
+    )
+
+    if (!oldRelationship) return
+
+    // Remove old link
+    setGraphData((prev: GraphData) => ({
+      ...prev,
+      links: prev.links.filter((link: Link) => {
+        const sourceId = typeof link.source === 'string' ? link.source : (link.source as Node).id
+        const targetId = typeof link.target === 'string' ? link.target : (link.target as Node).id
+        return !(
+          (sourceId === nodeId && targetId === oldRelationship.targetId) ||
+          (targetId === nodeId && sourceId === oldRelationship.targetId)
+        )
+      })
+    }))
+
+    // Add new link
+    const targetNode = graphData.nodes.find((n: Node) => n.id === oldRelationship.targetId)
+    if (!targetNode) return
+
+    const newLink: Link = {
+      source: newCommand === '<' ? targetNode.id : nodeId,
+      target: newCommand === '<' ? nodeId : targetNode.id,
+      type: newCommand === '=' ? "friend" : "parent-child"
+    }
+
+    setGraphData((prev: GraphData) => ({
+      ...prev,
+      links: [...prev.links, newLink]
+    }))
+  }
+
+  // Function to delete a relationship (link) from a node
+  const deleteRelationship = (nodeId: string, relType: string, targetName: string) => {
+    setGraphData((prev: GraphData) => {
+      // Find the target node by name
+      const targetNode = prev.nodes.find((n: Node) => n.name === targetName)
+      if (!targetNode) return prev
+      // Remove the link that matches the relationship
+      const filteredLinks = prev.links.filter((link: Link) => {
+        const sourceId = typeof link.source === 'string' ? link.source : (link.source as Node).id
+        const targetId = typeof link.target === 'string' ? link.target : (link.target as Node).id
+        if (relType === 'child') {
+          return !(sourceId === nodeId && targetId === targetNode.id && link.type === 'parent-child')
+        } else if (relType === 'parent') {
+          return !(sourceId === targetNode.id && targetId === nodeId && link.type === 'parent-child')
+        } else if (relType === 'friend') {
+          // Friend links are bidirectional
+          return !(((sourceId === nodeId && targetId === targetNode.id) || (sourceId === targetNode.id && targetId === nodeId)) && link.type === 'friend')
+        }
+        return true
+      })
+      return { ...prev, links: filteredLinks }
+    })
+  }
+
   // Handle node click
   const handleNodeClick = (node: Node, event: MouseEvent) => {
     event.stopPropagation()
@@ -408,11 +471,11 @@ export default function MindMap({ initialGraphDataFromFolder, initialNodeId, map
           onContentChange={(content) => updateNodeContent(editingNode.id, content)}
           onAddRelationship={(command, targetName) => addRelationship(editingNode.id, command, targetName)}
           onUpdateRelationship={(oldType, newCommand, targetName) => 
-            {} // updateRelationship(editingNode.id, oldType, newCommand, targetName)
+            updateRelationship(editingNode.id, oldType, newCommand, targetName)
           }
           onNameChange={(newName) => updateNodeName(editingNode.id, newName)}
           onClose={() => setEditingNode(null)}
-          onDeleteRelationship={(type, targetName) => {} /* deleteRelationship(editingNode.id, type, targetName) */}
+          onDeleteRelationship={(type, targetName) => deleteRelationship(editingNode.id, type, targetName)}
           onTextStyleChange={(textStyle) => updateNodeTextStyle(editingNode.id, textStyle)}
         />
       )}

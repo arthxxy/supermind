@@ -17,6 +17,7 @@ export interface Node extends d3.SimulationNodeDatum {
     isUnderline?: boolean;
     isStrikethrough?: boolean;
   };
+  sections?: Section[];
 }
 
 export interface Link extends d3.SimulationLinkDatum<Node> {
@@ -35,4 +36,14 @@ export interface Relationship {
   type: "friend" | "child" | "parent";
   targetId: string;
   targetName: string;
+}
+
+export interface Section {
+  id: string;
+  title: string;
+  level: number;
+  number: string;
+  content: string;
+  isCollapsed: boolean;
+  subsections: Section[];
 } 

@@ -574,7 +574,10 @@ export default function TreeView({
         if (d.isRingChild) return 2; // Medium border for ring children
         return 0;
       })
-      .attr("opacity", d => d.isRoot ? 1 : 0); // Only show white base circle for true root nodes
+      .attr("opacity", d => {
+        if (isHoverEnabled && d.id === currentHoverId) return 1; // Show hover circle
+        return d.isRoot ? 1 : 0; // Only show white base circle for true root nodes or hovered nodes
+      });
     
     // Update main node circles
     nodeElements.selectAll<SVGCircleElement, TreeNode>(".main-circle")
