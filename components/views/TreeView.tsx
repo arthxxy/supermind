@@ -556,9 +556,6 @@ export default function TreeView({
     if (isHoverEnabled && currentHoverId) {
       directlyConnectedToHovered.add(currentHoverId);
       
-      // Add the hovered node
-      directlyConnectedToHovered.add(currentHoverId);
-      
       // Find connected nodes using tree structure relationships
       const hoveredTreeNode = allTreeNodes.find(tn => tn.id === currentHoverId);
       if (hoveredTreeNode) {
@@ -573,13 +570,38 @@ export default function TreeView({
         });
       }
       
+      // Find all duplicates of the hovered node and their additional parents
+      const originalNodeId = hoveredTreeNode?.node.id || currentHoverId;
+      allTreeNodes.forEach(treeNode => {
+        // If this is a duplicate of the hovered node, highlight it and its parent
+        if (treeNode.node.id === originalNodeId && treeNode.id !== currentHoverId) {
+          directlyConnectedToHovered.add(treeNode.id);
+          if (treeNode.parent) {
+            directlyConnectedToHovered.add(treeNode.parent.id);
+          }
+        }
+        
+        // If this node's original is the hovered node, highlight it too
+        if (treeNode.id === currentHoverId && treeNode.node.id === originalNodeId) {
+          // Find all other instances (original + duplicates) of this node
+          allTreeNodes.forEach(otherTreeNode => {
+            if (otherTreeNode.node.id === originalNodeId && otherTreeNode.id !== currentHoverId) {
+              directlyConnectedToHovered.add(otherTreeNode.id);
+              if (otherTreeNode.parent) {
+                directlyConnectedToHovered.add(otherTreeNode.parent.id);
+              }
+            }
+          });
+        }
+      });
+      
       // Also find friend connections from the original link data
       graphData.links.forEach(link => {
         if (link.type === 'friend') {
           const sourceId = typeof link.source === 'string' ? link.source : link.source.id;
           const targetId = typeof link.target === 'string' ? link.target : link.target.id;
           
-                    // If one end of the friend link is hovered, highlight the other end
+          // If one end of the friend link is hovered, highlight the other end
           if (sourceId === currentHoverId) {
             const targetTreeNode = allTreeNodes.find(tn => tn.id === targetId);
             if (targetTreeNode) {
@@ -721,9 +743,9 @@ export default function TreeView({
     // Create links based on the actual tree structure we've built
     allTreeNodes.forEach(treeNode => {
       if (treeNode.parent) {
-        // Find the original link type from graphData
+        // For duplicates, we need to look up the original node ID in graphData.links
         const originalParentId = treeNode.parent.id;
-        const originalChildId = treeNode.id;
+        const originalChildId = treeNode.id.includes('_dup_') ? treeNode.node.id : treeNode.id;
         
         const originalLink = graphData.links.find(link => {
           const sourceId = typeof link.source === 'string' ? link.source : link.source.id;
