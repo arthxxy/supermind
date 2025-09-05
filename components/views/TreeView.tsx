@@ -669,7 +669,8 @@ export default function TreeView({
     allTreeNodes: TreeNode[],
     linkElements: d3.Selection<SVGLineElement, Link, SVGGElement, unknown>,
     textElements: d3.Selection<SVGTextElement, TreeNode, SVGGElement, unknown>,
-    nodeElements: d3.Selection<SVGGElement, TreeNode, SVGGElement, unknown>
+    nodeElements: d3.Selection<SVGGElement, TreeNode, SVGGElement, unknown>,
+    duplicateTransparency: number
   ) => {
     let directlyConnectedToHovered = new Set<string>();
     if (isHoverEnabled && currentHoverId) {
@@ -787,9 +788,17 @@ export default function TreeView({
         return d.isRoot ? 1 : 0; // Only show white base circle for true root nodes or hovered nodes
       });
     
-    // Update main node circles
+    // Update main node circles - preserve duplicate name transparency
     nodeElements.selectAll<SVGCircleElement, TreeNode>(".main-circle")
-      .attr("opacity", 1);
+      .attr("opacity", (d: TreeNode) => {
+        // Apply transparency to nodes with duplicate names
+        const nodeName = d.node.name;
+        const nodesWithSameName = allTreeNodes.filter(node => node.node.name === nodeName);
+        if (nodesWithSameName.length > 1) {
+          return duplicateTransparency;
+        }
+        return 1;
+      });
 
     // Update link styles
     linkElements.attr("stroke", (d: Link) => {
@@ -1098,7 +1107,7 @@ export default function TreeView({
     }, true);
 
     // Apply initial visual styles for tree mode
-    updateTreeVisualStyles(hoveredNodeId, enableHoverEffects, allTreeNodes, linkElements, textElements, nodeElements);
+    updateTreeVisualStyles(hoveredNodeId, enableHoverEffects, allTreeNodes, linkElements, textElements, nodeElements, duplicateNodeTransparency);
     
     // Apply repulsion forces to prevent overlapping siblings
     applyTreeRepulsionForces(allTreeNodes, nodeElements);
@@ -1117,10 +1126,11 @@ export default function TreeView({
         treeNodesRef.current,
         treeLinkElementsRef.current,
         treeTextElementsRef.current,
-        treeNodeElementsRef.current
+        treeNodeElementsRef.current,
+        duplicateNodeTransparency
       );
     }
-  }, [hoveredNodeId, enableHoverEffects]);
+  }, [hoveredNodeId, enableHoverEffects, duplicateNodeTransparency]);
 
   return null; // This component only handles D3 rendering
 }
