@@ -720,7 +720,7 @@ export function MarkdownEditor({
           </div>
         </div>
 
-        <div className="p-4 flex flex-col gap-2 flex-grow overflow-y-auto">
+        <div className="p-4 flex flex-col gap-2 flex-grow overflow-y-auto min-h-0">
           <div className="relative">
             <form onSubmit={handleFormSubmit}>
               <Input
@@ -758,7 +758,7 @@ export function MarkdownEditor({
           </div>
 
           {isExistingRelationshipsVisible && (
-            <div className="border border-zinc-700 rounded-md bg-zinc-800 overflow-hidden max-h-40 overflow-y-auto">
+            <div className="border border-zinc-700 rounded-md bg-zinc-800 overflow-hidden max-h-40 overflow-y-auto flex-shrink-0">
               {relationships.length > 0 ? (
                 relationships.map((rel, index) => (
                   <Input
@@ -774,8 +774,8 @@ export function MarkdownEditor({
             </div>
           )}
 
-          <div className="flex gap-2 flex-grow">
-            <div className="flex-1 flex flex-col relative">
+          <div className={`flex gap-2 ${isExistingRelationshipsVisible ? 'flex-1 min-h-0' : 'flex-grow'}`}>
+            <div className="flex-1 flex flex-col relative min-h-0">
               {/* Editable preview */}
               <div
                 ref={contentTextareaRef as any}
@@ -789,7 +789,7 @@ export function MarkdownEditor({
                   const markdown = htmlToMarkdown(html);
                   handleContentChange(markdown);
                 }}
-                className="min-h-[200px] flex-grow bg-zinc-700 border border-zinc-600 text-white rounded-md p-3 overflow-auto focus:outline-none"
+                className="min-h-[200px] flex-1 bg-zinc-700 border border-zinc-600 text-white rounded-md p-3 overflow-auto focus:outline-none"
                 style={{ fontSize: `${textStyle.fontSize}px`, lineHeight: '1.5' }}
               >
                 {/* initial content will be set via useEffect */}
