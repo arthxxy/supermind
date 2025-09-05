@@ -73,6 +73,7 @@ export default function TreeView({
         }
       });
 
+
       // Create TreeNode objects - for nodes with multiple parents, create duplicates
       const duplicateCounter = new Map<string, number>();
       
@@ -1063,15 +1064,15 @@ export default function TreeView({
       .attr("r", 8)
       .attr("class", "main-circle")
       .attr("fill", (d: TreeNode) => d.node.color || "#999")
-      .attr("opacity", (d: TreeNode) => {
-        // Apply transparency to nodes with duplicate names
-        const nodeName = d.node.name;
-        const nodesWithSameName = allTreeNodes.filter(node => node.node.name === nodeName);
-        if (nodesWithSameName.length > 1) {
-          return duplicateNodeTransparency;
-        }
-        return 1;
-      });
+             .attr("opacity", (d: TreeNode) => {
+         // Apply transparency to nodes with duplicate names
+         const nodeName = d.node.name;
+         const nodesWithSameName = allTreeNodes.filter(node => node.node.name === nodeName);
+         if (nodesWithSameName.length > 1) {
+           return duplicateNodeTransparency;
+         }
+         return 1;
+       });
 
     // Add text labels
     const textElements = nodeElements.append("text")
