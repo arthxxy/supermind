@@ -562,6 +562,10 @@ export default function TreeView({
 
     // Update node styles
     nodeElements.selectAll<SVGCircleElement, TreeNode>(".node-base")
+      .attr("fill", d => {
+        if (isHoverEnabled && d.id === currentHoverId) return "transparent"; // Transparent fill for hover (only show stroke)
+        return d.isRoot ? "white" : "transparent"; // White fill for root nodes
+      })
       .attr("stroke", d => {
         if (isHoverEnabled && d.id === currentHoverId) return "rgba(200,200,255,0.7)";
         if (d.isRoot) return "#ffffff"; // White border for true root nodes
@@ -796,7 +800,7 @@ export default function TreeView({
     nodeElements.append("circle")
       .attr("r", 11)
       .attr("class", "node-base")
-      .attr("fill", "white")
+      .attr("fill", (d: TreeNode) => d.isRoot ? "white" : "transparent")
       .attr("stroke", (d: TreeNode) => {
         if (d.isRoot) return "#ffffff"; // White border for true root nodes
         if (d.isRingChild) return "#feca57"; // Yellow border for ring children
