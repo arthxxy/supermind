@@ -178,8 +178,8 @@ export default function TreeView({
         }
       });
 
-      // After building relationships, assign parent relationships to parent duplicates
-      // Parent duplicates should inherit the same parent as their original node
+      // After building relationships, handle parent duplicates
+      // Parent duplicates should be isolated - only connect to their target child
       nodeMap.forEach((treeNode, treeNodeId) => {
         if (treeNodeId.includes('_parent_dup_for_')) {
           // Extract original parent ID from duplicate ID
@@ -188,11 +188,23 @@ export default function TreeView({
             const originalParentId = match[1];
             const originalParentTreeNode = nodeMap.get(originalParentId);
             
-            if (originalParentTreeNode && originalParentTreeNode.parent) {
-              // Assign the same parent as the original node
-              treeNode.parent = originalParentTreeNode.parent;
-              // Add this duplicate as a child to the grandparent
-              originalParentTreeNode.parent.children.push(treeNode);
+            if (originalParentTreeNode) {
+              // Duplicate parents should be isolated - no parent assigned
+              // They will only connect to the original multi-parent child
+              treeNode.parent = undefined;
+              
+              // Ensure the duplicate parent has the same level as the original parent
+              if (treeNode.node.level !== originalParentTreeNode.node.level) {
+                treeNode.node = {
+                  ...treeNode.node,
+                  level: originalParentTreeNode.node.level
+                };
+              }
+              
+              // Mark as root if the original parent is a root
+              if (!originalParentTreeNode.parent) {
+                treeNode.isRoot = true;
+              }
             }
           }
         }
@@ -223,23 +235,30 @@ export default function TreeView({
        
        // Handle friend-only nodes that were filtered out by identifyTrueRoots
        const friendOnlyNodes: TreeNode[] = [];
+       const parentDuplicates: TreeNode[] = [];
+       
        potentialRoots.forEach(potentialRoot => {
          if (!rootNodes.includes(potentialRoot)) {
-           // This node was filtered out - check if it has friend connections
-           const hasFriendConnections = links.some(link => {
-             const sourceId = typeof link.source === 'string' ? link.source : link.source.id;
-             const targetId = typeof link.target === 'string' ? link.target : link.target.id;
-             return link.type === 'friend' && (sourceId === potentialRoot.id || targetId === potentialRoot.id);
-           });
-           
-           if (hasFriendConnections) {
-             potentialRoot.isFriendOnly = true;
-             friendOnlyNodes.push(potentialRoot);
+           // Check if this is a parent duplicate
+           if (potentialRoot.id.includes('_parent_dup_for_')) {
+             parentDuplicates.push(potentialRoot);
+           } else {
+             // This node was filtered out - check if it has friend connections
+             const hasFriendConnections = links.some(link => {
+               const sourceId = typeof link.source === 'string' ? link.source : link.source.id;
+               const targetId = typeof link.target === 'string' ? link.target : link.target.id;
+               return link.type === 'friend' && (sourceId === potentialRoot.id || targetId === potentialRoot.id);
+             });
+             
+             if (hasFriendConnections) {
+               potentialRoot.isFriendOnly = true;
+               friendOnlyNodes.push(potentialRoot);
+             }
            }
          }
        });
 
-      trees.push([...rootNodes, ...friendOnlyNodes]);
+      trees.push([...rootNodes, ...friendOnlyNodes, ...parentDuplicates]);
     });
 
     return trees;
@@ -253,9 +272,10 @@ export default function TreeView({
 
     const allNodes: TreeNode[] = [];
     
-    // Separate friend-only nodes from hierarchical roots
-    const hierarchicalRoots = treeRoots.filter(root => !root.isFriendOnly);
+    // Separate different types of nodes
+    const hierarchicalRoots = treeRoots.filter(root => !root.isFriendOnly && !root.id.includes('_parent_dup_for_'));
     const friendOnlyNodes = treeRoots.filter(root => root.isFriendOnly);
+    const parentDuplicates = treeRoots.filter(root => root.id.includes('_parent_dup_for_'));
 
     // Layout hierarchical trees first
     if (hierarchicalRoots.length === 1) {
@@ -285,8 +305,13 @@ export default function TreeView({
       allNodes.push(friendNode);
     });
     
+    // Add parent duplicates to allNodes first (they'll be positioned later)
+    parentDuplicates.forEach(parentDup => {
+      allNodes.push(parentDup);
+    });
+    
     // Position parent duplicates near their original child
-    treeRoots.forEach(rootNode => {
+    hierarchicalRoots.forEach(rootNode => {
       positionParentDuplicates(rootNode, allNodes, levelDist);
     });
 
