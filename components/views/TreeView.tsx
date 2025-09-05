@@ -235,26 +235,28 @@ export default function TreeView({
        
        // Handle friend-only nodes that were filtered out by identifyTrueRoots
        const friendOnlyNodes: TreeNode[] = [];
-       const parentDuplicates: TreeNode[] = [];
        
        potentialRoots.forEach(potentialRoot => {
          if (!rootNodes.includes(potentialRoot)) {
-           // Check if this is a parent duplicate
-           if (potentialRoot.id.includes('_parent_dup_for_')) {
-             parentDuplicates.push(potentialRoot);
-           } else {
-             // This node was filtered out - check if it has friend connections
-             const hasFriendConnections = links.some(link => {
-               const sourceId = typeof link.source === 'string' ? link.source : link.source.id;
-               const targetId = typeof link.target === 'string' ? link.target : link.target.id;
-               return link.type === 'friend' && (sourceId === potentialRoot.id || targetId === potentialRoot.id);
-             });
-             
-             if (hasFriendConnections) {
-               potentialRoot.isFriendOnly = true;
-               friendOnlyNodes.push(potentialRoot);
-             }
+           // This node was filtered out - check if it has friend connections
+           const hasFriendConnections = links.some(link => {
+             const sourceId = typeof link.source === 'string' ? link.source : link.source.id;
+             const targetId = typeof link.target === 'string' ? link.target : link.target.id;
+             return link.type === 'friend' && (sourceId === potentialRoot.id || targetId === potentialRoot.id);
+           });
+           
+           if (hasFriendConnections) {
+             potentialRoot.isFriendOnly = true;
+             friendOnlyNodes.push(potentialRoot);
            }
+         }
+       });
+
+       // Collect parent duplicates directly from nodeMap (they are intentionally isolated)
+       const parentDuplicates: TreeNode[] = [];
+       nodeMap.forEach(treeNode => {
+         if (treeNode.id.includes('_parent_dup_for_')) {
+           parentDuplicates.push(treeNode);
          }
        });
 
