@@ -78,14 +78,35 @@ export default function TreeView({
       componentNodes.forEach(node => {
         const parentIds = nodeToParentsMap.get(node.id) || [];
         
-        // Always create the original node first
-        nodeMap.set(node.id, {
-          id: node.id,
-          node: node,
-          children: []
-        });
-        
-
+        if (parentIds.length <= 1) {
+          // Single or no parent - create normal TreeNode
+          nodeMap.set(node.id, {
+            id: node.id,
+            node: node,
+            children: []
+          });
+        } else {
+          // Multiple parents - create original for first parent + duplicates for additional parents
+          
+          // Original node for the first parent (gets full connections to children)
+          nodeMap.set(node.id, {
+            id: node.id,
+            node: node,
+            children: []
+          });
+          
+          // Create duplicate nodes for additional parents (parent index 1 onwards)
+          for (let i = 1; i < parentIds.length; i++) {
+            const duplicateId = `${node.id}_dup_${i}`;
+            duplicateCounter.set(node.id, (duplicateCounter.get(node.id) || 0) + 1);
+            
+            nodeMap.set(duplicateId, {
+              id: duplicateId,
+              node: node, // Same underlying node data
+              children: [] // Duplicates start with no children - they won't inherit children
+            });
+          }
+        }
       });
       
 
@@ -104,11 +125,27 @@ export default function TreeView({
           const parentIds = nodeToParentsMap.get(targetId) || [];
           const sourceTreeNode = nodeMap.get(sourceId);
           
-          // Build simple parent-child relationship
-          const targetTreeNode = nodeMap.get(targetId);
-          if (sourceTreeNode && targetTreeNode) {
-            targetTreeNode.parent = sourceTreeNode;
-            sourceTreeNode.children.push(targetTreeNode);
+          if (!sourceTreeNode || parentIds.length === 0) return;
+          
+          // Find which parent index this source is
+          const parentIndex = parentIds.indexOf(sourceId);
+          if (parentIndex === -1) return;
+          
+          if (parentIndex === 0) {
+            // First parent connects to original node (which will get all the children)
+            const targetTreeNode = nodeMap.get(targetId);
+            if (targetTreeNode) {
+              targetTreeNode.parent = sourceTreeNode;
+              sourceTreeNode.children.push(targetTreeNode);
+            }
+          } else {
+            // Additional parents connect to duplicate nodes (which have no children)
+            const duplicateId = `${targetId}_dup_${parentIndex}`;
+            const duplicateTreeNode = nodeMap.get(duplicateId);
+            if (duplicateTreeNode) {
+              duplicateTreeNode.parent = sourceTreeNode;
+              sourceTreeNode.children.push(duplicateTreeNode);
+            }
           }
         }
       });
@@ -784,7 +821,9 @@ export default function TreeView({
       .on("pointerover", function(event, d: TreeNode) {
         event.stopPropagation();
         if (enableHoverEffects) {
-          onHoveredNodeChange(d.id);
+          // For duplicates, use the original node ID for hover effects
+          const hoverNodeId = d.id.includes('_dup_') ? d.node.id : d.id;
+          onHoveredNodeChange(hoverNodeId);
         }
       })
       .on("pointerout", function(event, d: TreeNode) {
