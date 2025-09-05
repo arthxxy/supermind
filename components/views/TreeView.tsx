@@ -201,19 +201,17 @@ export default function TreeView({
                 };
               }
               
-              // Mark as root if the original parent is a root
-              if (!originalParentTreeNode.parent) {
-                treeNode.isRoot = true;
-              }
+              // Duplicate parents are never roots - they are positioning helpers
+              treeNode.isRoot = false;
             }
           }
         }
       });
 
-             // Find potential root nodes (nodes without parents)
+             // Find potential root nodes (nodes without parents, excluding parent duplicates)
        const potentialRoots: TreeNode[] = [];
        nodeMap.forEach(treeNode => {
-         if (!treeNode.parent) {
+         if (!treeNode.parent && !treeNode.id.includes('_parent_dup_for_')) {
            potentialRoots.push(treeNode);
          }
        });
