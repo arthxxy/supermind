@@ -525,20 +525,22 @@ export default function TreeView({
     if (!treeLinkElementsRef.current) return;
     
     treeLinkElementsRef.current
-      .attr("x1", (d) => {
-        const sourceTreeNode = allTreeNodes.find(tn => tn.node.id === (typeof d.source === 'string' ? d.source : d.source.id));
+      .attr("x1", (d: any) => {
+        // Use stored TreeNode ID for proper positioning
+        const sourceTreeNode = allTreeNodes.find(tn => tn.id === d.sourceTreeNodeId);
         return sourceTreeNode?.x || 0;
       })
-      .attr("y1", (d) => {
-        const sourceTreeNode = allTreeNodes.find(tn => tn.node.id === (typeof d.source === 'string' ? d.source : d.source.id));
+      .attr("y1", (d: any) => {
+        const sourceTreeNode = allTreeNodes.find(tn => tn.id === d.sourceTreeNodeId);
         return sourceTreeNode?.y || 0;
       })
-      .attr("x2", (d) => {
-        const targetTreeNode = allTreeNodes.find(tn => tn.node.id === (typeof d.target === 'string' ? d.target : d.target.id));
+      .attr("x2", (d: any) => {
+        // Use stored TreeNode ID for proper positioning
+        const targetTreeNode = allTreeNodes.find(tn => tn.id === d.targetTreeNodeId);
         return targetTreeNode?.x || 0;
       })
-      .attr("y2", (d) => {
-        const targetTreeNode = allTreeNodes.find(tn => tn.node.id === (typeof d.target === 'string' ? d.target : d.target.id));
+      .attr("y2", (d: any) => {
+        const targetTreeNode = allTreeNodes.find(tn => tn.id === d.targetTreeNodeId);
         return targetTreeNode?.y || 0;
       });
   };
@@ -757,8 +759,11 @@ export default function TreeView({
           linkData.push({
             ...originalLink,
             source: treeNode.parent.node,
-            target: treeNode.node
-          });
+            target: treeNode.node,
+            // Store TreeNode IDs for proper positioning
+            sourceTreeNodeId: treeNode.parent.id,
+            targetTreeNodeId: treeNode.id
+          } as any);
         }
       }
     });
@@ -778,8 +783,11 @@ export default function TreeView({
           linkData.push({
             ...link,
             source: sourceTreeNode.node,
-            target: targetTreeNode.node
-          });
+            target: targetTreeNode.node,
+            // Store TreeNode IDs for proper positioning
+            sourceTreeNodeId: sourceTreeNode.id,
+            targetTreeNodeId: targetTreeNode.id
+          } as any);
         }
       }
     });
@@ -791,20 +799,22 @@ export default function TreeView({
       .join("line")
       .attr("stroke-width", (d: Link) => d.type === "parent-child" ? 2 : 1)
       .attr("stroke-dasharray", (d: Link) => d.type === "friend" ? "5,5" : null)
-      .attr("x1", (d) => {
-        const sourceTreeNode = allTreeNodes.find(tn => tn.node.id === (typeof d.source === 'string' ? d.source : d.source.id));
+      .attr("x1", (d: any) => {
+        // Use stored TreeNode ID for proper positioning
+        const sourceTreeNode = allTreeNodes.find(tn => tn.id === d.sourceTreeNodeId);
         return sourceTreeNode?.x || 0;
       })
-      .attr("y1", (d) => {
-        const sourceTreeNode = allTreeNodes.find(tn => tn.node.id === (typeof d.source === 'string' ? d.source : d.source.id));
+      .attr("y1", (d: any) => {
+        const sourceTreeNode = allTreeNodes.find(tn => tn.id === d.sourceTreeNodeId);
         return sourceTreeNode?.y || 0;
       })
-      .attr("x2", (d) => {
-        const targetTreeNode = allTreeNodes.find(tn => tn.node.id === (typeof d.target === 'string' ? d.target : d.target.id));
+      .attr("x2", (d: any) => {
+        // Use stored TreeNode ID for proper positioning
+        const targetTreeNode = allTreeNodes.find(tn => tn.id === d.targetTreeNodeId);
         return targetTreeNode?.x || 0;
       })
-      .attr("y2", (d) => {
-        const targetTreeNode = allTreeNodes.find(tn => tn.node.id === (typeof d.target === 'string' ? d.target : d.target.id));
+      .attr("y2", (d: any) => {
+        const targetTreeNode = allTreeNodes.find(tn => tn.id === d.targetTreeNodeId);
         return targetTreeNode?.y || 0;
       });
     
