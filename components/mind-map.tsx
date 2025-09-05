@@ -59,6 +59,7 @@ export default function MindMap({ initialGraphDataFromFolder, initialNodeId, map
   const [interGraphCompactness, setInterGraphCompactness] = useState<number>(10)
   const [showSettings, setShowSettings] = useState<boolean>(false)
   const [enableHoverEffects, setEnableHoverEffects] = useState<boolean>(true)
+  const [duplicateNodeTransparency, setDuplicateNodeTransparency] = useState<number>(0.9) // 10% more transparent (90% opacity)
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null)
   const [isZooming, setIsZooming] = useState<boolean>(false)
 
@@ -440,6 +441,7 @@ export default function MindMap({ initialGraphDataFromFolder, initialNodeId, map
           enableHoverEffects={enableHoverEffects}
           intraGraphCompactness={intraGraphCompactness}
           interGraphCompactness={interGraphCompactness}
+          duplicateNodeTransparency={duplicateNodeTransparency}
           isZooming={isZooming}
           containerRef={containerRef}
           svgRef={svgRef}
@@ -557,6 +559,26 @@ export default function MindMap({ initialGraphDataFromFolder, initialNodeId, map
             </div>
 
 
+
+            <div className="mt-4 pt-4 border-t border-gray-700">
+              <label htmlFor="duplicateTransparency" className="block text-sm font-medium text-gray-300 mb-1">
+                Duplicate Node Transparency
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="range"
+                  id="duplicateTransparency"
+                  min="0.1"
+                  max="1.0"
+                  step="0.1"
+                  value={duplicateNodeTransparency}
+                  onChange={e => setDuplicateNodeTransparency(parseFloat(e.target.value))}
+                  className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                />
+                <span className="text-sm text-gray-400 w-12 text-right">{Math.round((1 - duplicateNodeTransparency) * 100)}%</span>
+              </div>
+              <p className="text-xs text-gray-500 mt-1">Transparency of nodes with duplicate names. 0% = opaque, 90% = very transparent.</p>
+            </div>
 
             <div className="mt-4 pt-4 border-t border-gray-700">
               <label className="flex items-center justify-between text-sm font-medium text-gray-300">
