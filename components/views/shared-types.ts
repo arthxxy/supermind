@@ -37,6 +37,7 @@ export interface ViewProps {
   enableHoverEffects: boolean;
   intraGraphCompactness: number;
   interGraphCompactness: number;
+  duplicateNodeTransparency?: number;
   isZooming: boolean;
   containerRef: React.RefObject<HTMLDivElement>;
   svgRef: React.RefObject<SVGSVGElement>;

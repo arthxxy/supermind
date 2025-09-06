@@ -29,6 +29,7 @@ export default function TreeView({
   enableHoverEffects,
   intraGraphCompactness,
   interGraphCompactness,
+  duplicateNodeTransparency = 0.9,
   isZooming,
   containerRef,
   svgRef,
@@ -72,20 +73,57 @@ export default function TreeView({
         }
       });
 
+
       // Create TreeNode objects - for nodes with multiple parents, create duplicates
       const duplicateCounter = new Map<string, number>();
       
       componentNodes.forEach(node => {
         const parentIds = nodeToParentsMap.get(node.id) || [];
         
-        // Always create the original node first
-        nodeMap.set(node.id, {
-          id: node.id,
-          node: node,
-          children: []
-        });
-        
-
+        if (parentIds.length <= 1) {
+          // Single or no parent - create normal TreeNode
+          nodeMap.set(node.id, {
+            id: node.id,
+            node: node,
+            children: []
+          });
+        } else {
+          // Multiple parents - create original for first parent + duplicates for additional parents
+          
+          // Original node for the first parent (gets full connections to children)
+          nodeMap.set(node.id, {
+            id: node.id,
+            node: node,
+            children: []
+          });
+          
+          // Create duplicate nodes for additional parents (parent index 1 onwards)
+          for (let i = 1; i < parentIds.length; i++) {
+            const duplicateId = `${node.id}_dup_${i}`;
+            duplicateCounter.set(node.id, (duplicateCounter.get(node.id) || 0) + 1);
+            
+            nodeMap.set(duplicateId, {
+              id: duplicateId,
+              node: node, // Same underlying node data
+              children: [] // Duplicates start with no children - they won't inherit children
+            });
+          }
+          
+          // Create duplicate parent nodes near the original multi-parent child
+          for (let i = 1; i < parentIds.length; i++) {
+            const parentId = parentIds[i];
+            const parentNode = componentNodes.find(n => n.id === parentId);
+            if (parentNode) {
+              const parentDuplicateId = `${parentId}_parent_dup_for_${node.id}`;
+              
+              nodeMap.set(parentDuplicateId, {
+                id: parentDuplicateId,
+                node: parentNode, // Same underlying parent node data
+                children: [] // Parent duplicates will only connect to original multi-parent child
+              });
+            }
+          }
+        }
       });
       
 
@@ -104,19 +142,78 @@ export default function TreeView({
           const parentIds = nodeToParentsMap.get(targetId) || [];
           const sourceTreeNode = nodeMap.get(sourceId);
           
-          // Build simple parent-child relationship
-          const targetTreeNode = nodeMap.get(targetId);
-          if (sourceTreeNode && targetTreeNode) {
-            targetTreeNode.parent = sourceTreeNode;
-            sourceTreeNode.children.push(targetTreeNode);
+          if (!sourceTreeNode || parentIds.length === 0) return;
+          
+          // Find which parent index this source is
+          const parentIndex = parentIds.indexOf(sourceId);
+          if (parentIndex === -1) return;
+          
+          if (parentIndex === 0) {
+            // First parent connects to original node (which will get all the children)
+            const targetTreeNode = nodeMap.get(targetId);
+            if (targetTreeNode) {
+              targetTreeNode.parent = sourceTreeNode;
+              sourceTreeNode.children.push(targetTreeNode);
+            }
+            
+            // Also create connections from parent duplicates to original child
+            for (let i = 1; i < parentIds.length; i++) {
+              const otherParentId = parentIds[i];
+              const parentDuplicateId = `${otherParentId}_parent_dup_for_${targetId}`;
+              const parentDuplicateNode = nodeMap.get(parentDuplicateId);
+              
+              if (parentDuplicateNode && targetTreeNode) {
+                // Connect parent duplicate to original child
+                parentDuplicateNode.children.push(targetTreeNode);
+                // Note: Don't set parent on targetTreeNode as it already has the first parent
+              }
+            }
+          } else {
+            // Additional parents connect to duplicate nodes (which have no children)
+            const duplicateId = `${targetId}_dup_${parentIndex}`;
+            const duplicateTreeNode = nodeMap.get(duplicateId);
+            if (duplicateTreeNode) {
+              duplicateTreeNode.parent = sourceTreeNode;
+              sourceTreeNode.children.push(duplicateTreeNode);
+            }
           }
         }
       });
 
-             // Find potential root nodes (nodes without parents)
+      // After building relationships, handle parent duplicates
+      // Parent duplicates should be isolated - only connect to their target child
+      nodeMap.forEach((treeNode, treeNodeId) => {
+        if (treeNodeId.includes('_parent_dup_for_')) {
+          // Extract original parent ID from duplicate ID
+          const match = treeNodeId.match(/^(.+)_parent_dup_for_(.+)$/);
+          if (match) {
+            const originalParentId = match[1];
+            const originalParentTreeNode = nodeMap.get(originalParentId);
+            
+            if (originalParentTreeNode) {
+              // Duplicate parents should be isolated - no parent assigned
+              // They will only connect to the original multi-parent child
+              treeNode.parent = undefined;
+              
+              // Ensure the duplicate parent has the same level as the original parent
+              if (treeNode.node.level !== originalParentTreeNode.node.level) {
+                treeNode.node = {
+                  ...treeNode.node,
+                  level: originalParentTreeNode.node.level
+                };
+              }
+              
+              // Duplicate parents are never roots - they are positioning helpers
+              treeNode.isRoot = false;
+            }
+          }
+        }
+      });
+
+             // Find potential root nodes (nodes without parents, excluding parent duplicates)
        const potentialRoots: TreeNode[] = [];
        nodeMap.forEach(treeNode => {
-         if (!treeNode.parent) {
+         if (!treeNode.parent && !treeNode.id.includes('_parent_dup_for_')) {
            potentialRoots.push(treeNode);
          }
        });
@@ -138,6 +235,7 @@ export default function TreeView({
        
        // Handle friend-only nodes that were filtered out by identifyTrueRoots
        const friendOnlyNodes: TreeNode[] = [];
+       
        potentialRoots.forEach(potentialRoot => {
          if (!rootNodes.includes(potentialRoot)) {
            // This node was filtered out - check if it has friend connections
@@ -154,7 +252,15 @@ export default function TreeView({
          }
        });
 
-      trees.push([...rootNodes, ...friendOnlyNodes]);
+       // Collect parent duplicates directly from nodeMap (they are intentionally isolated)
+       const parentDuplicates: TreeNode[] = [];
+       nodeMap.forEach(treeNode => {
+         if (treeNode.id.includes('_parent_dup_for_')) {
+           parentDuplicates.push(treeNode);
+         }
+       });
+
+      trees.push([...rootNodes, ...friendOnlyNodes, ...parentDuplicates]);
     });
 
     return trees;
@@ -168,9 +274,10 @@ export default function TreeView({
 
     const allNodes: TreeNode[] = [];
     
-    // Separate friend-only nodes from hierarchical roots
-    const hierarchicalRoots = treeRoots.filter(root => !root.isFriendOnly);
+    // Separate different types of nodes
+    const hierarchicalRoots = treeRoots.filter(root => !root.isFriendOnly && !root.id.includes('_parent_dup_for_'));
     const friendOnlyNodes = treeRoots.filter(root => root.isFriendOnly);
+    const parentDuplicates = treeRoots.filter(root => root.id.includes('_parent_dup_for_'));
 
     // Layout hierarchical trees first
     if (hierarchicalRoots.length === 1) {
@@ -199,8 +306,58 @@ export default function TreeView({
       positionFriendOnlyNode(friendNode, allNodes, graphData.links, levelDist);
       allNodes.push(friendNode);
     });
+    
+    // Add parent duplicates to allNodes first (they'll be positioned later)
+    parentDuplicates.forEach(parentDup => {
+      allNodes.push(parentDup);
+    });
+    
+    // Position parent duplicates near their original child
+    hierarchicalRoots.forEach(rootNode => {
+      positionParentDuplicates(rootNode, allNodes, levelDist);
+    });
 
     return allNodes;
+  };
+
+  // Position parent duplicates near their original child
+  const positionParentDuplicates = (rootNode: TreeNode, allNodes: TreeNode[], levelDist: number) => {
+    const visitedNodes = new Set<string>();
+    
+    const positionDuplicatesRecursively = (node: TreeNode) => {
+      if (visitedNodes.has(node.id)) return;
+      visitedNodes.add(node.id);
+      
+      // Look for parent duplicates that connect to this node
+      const parentDuplicates = allNodes.filter(n => 
+        n.id.includes('_parent_dup_for_') && 
+        n.children.some(child => child.id === node.id)
+      );
+      
+      if (parentDuplicates.length > 0 && node.x !== undefined && node.y !== undefined) {
+        // Position parent duplicates around the original child node
+        const angleStep = (2 * Math.PI) / Math.max(parentDuplicates.length, 4);
+        const radius = levelDist * 0.6; // Closer than normal parent-child distance
+        
+        parentDuplicates.forEach((parentDup, index) => {
+          const angle = angleStep * index;
+          parentDup.x = node.x! + radius * Math.cos(angle);
+          parentDup.y = node.y! + radius * Math.sin(angle);
+          parentDup.distance = (node.distance || 0) - radius; // Slightly closer to root
+          
+          if (!allNodes.includes(parentDup)) {
+            allNodes.push(parentDup);
+          }
+        });
+      }
+      
+      // Recursively position duplicates for children
+      node.children.forEach(child => {
+        positionDuplicatesRecursively(child);
+      });
+    };
+    
+    positionDuplicatesRecursively(rootNode);
   };
 
   // Position friend-only node near its friend connections
@@ -488,20 +645,22 @@ export default function TreeView({
     if (!treeLinkElementsRef.current) return;
     
     treeLinkElementsRef.current
-      .attr("x1", (d) => {
-        const sourceTreeNode = allTreeNodes.find(tn => tn.node.id === (typeof d.source === 'string' ? d.source : d.source.id));
+      .attr("x1", (d: any) => {
+        // Use stored TreeNode ID for proper positioning
+        const sourceTreeNode = allTreeNodes.find(tn => tn.id === d.sourceTreeNodeId);
         return sourceTreeNode?.x || 0;
       })
-      .attr("y1", (d) => {
-        const sourceTreeNode = allTreeNodes.find(tn => tn.node.id === (typeof d.source === 'string' ? d.source : d.source.id));
+      .attr("y1", (d: any) => {
+        const sourceTreeNode = allTreeNodes.find(tn => tn.id === d.sourceTreeNodeId);
         return sourceTreeNode?.y || 0;
       })
-      .attr("x2", (d) => {
-        const targetTreeNode = allTreeNodes.find(tn => tn.node.id === (typeof d.target === 'string' ? d.target : d.target.id));
+      .attr("x2", (d: any) => {
+        // Use stored TreeNode ID for proper positioning
+        const targetTreeNode = allTreeNodes.find(tn => tn.id === d.targetTreeNodeId);
         return targetTreeNode?.x || 0;
       })
-      .attr("y2", (d) => {
-        const targetTreeNode = allTreeNodes.find(tn => tn.node.id === (typeof d.target === 'string' ? d.target : d.target.id));
+      .attr("y2", (d: any) => {
+        const targetTreeNode = allTreeNodes.find(tn => tn.id === d.targetTreeNodeId);
         return targetTreeNode?.y || 0;
       });
   };
@@ -513,13 +672,11 @@ export default function TreeView({
     allTreeNodes: TreeNode[],
     linkElements: d3.Selection<SVGLineElement, Link, SVGGElement, unknown>,
     textElements: d3.Selection<SVGTextElement, TreeNode, SVGGElement, unknown>,
-    nodeElements: d3.Selection<SVGGElement, TreeNode, SVGGElement, unknown>
+    nodeElements: d3.Selection<SVGGElement, TreeNode, SVGGElement, unknown>,
+    duplicateTransparency: number
   ) => {
     let directlyConnectedToHovered = new Set<string>();
     if (isHoverEnabled && currentHoverId) {
-      directlyConnectedToHovered.add(currentHoverId);
-      
-      // Add the hovered node
       directlyConnectedToHovered.add(currentHoverId);
       
       // Find connected nodes using tree structure relationships
@@ -536,13 +693,64 @@ export default function TreeView({
         });
       }
       
+      // Find all duplicates of the hovered node and their additional parents
+      const originalNodeId = hoveredTreeNode?.node.id || currentHoverId;
+      allTreeNodes.forEach(treeNode => {
+        // If this is a duplicate of the hovered node, highlight it and its parent
+        if (treeNode.node.id === originalNodeId && treeNode.id !== currentHoverId) {
+          directlyConnectedToHovered.add(treeNode.id);
+          if (treeNode.parent) {
+            directlyConnectedToHovered.add(treeNode.parent.id);
+          }
+        }
+        
+        // If this node's original is the hovered node, highlight it too
+        if (treeNode.id === currentHoverId && treeNode.node.id === originalNodeId) {
+          // Find all other instances (original + duplicates) of this node
+          allTreeNodes.forEach(otherTreeNode => {
+            if (otherTreeNode.node.id === originalNodeId && otherTreeNode.id !== currentHoverId) {
+              directlyConnectedToHovered.add(otherTreeNode.id);
+              if (otherTreeNode.parent) {
+                directlyConnectedToHovered.add(otherTreeNode.parent.id);
+              }
+            }
+          });
+        }
+      });
+      
+      // If hovering over a parent duplicate, highlight the original parent and child duplicates
+      if (currentHoverId && currentHoverId.includes('_parent_dup_for_')) {
+        // Extract original parent ID and child ID from the duplicate ID
+        const match = currentHoverId.match(/^(.+)_parent_dup_for_(.+)$/);
+        if (match) {
+          const [, originalParentId, childId] = match;
+          
+          // Highlight the original parent
+          directlyConnectedToHovered.add(originalParentId);
+          
+          // Highlight all child duplicates for this child
+          allTreeNodes.forEach(treeNode => {
+            if (treeNode.node.id === childId) {
+              directlyConnectedToHovered.add(treeNode.id);
+            }
+          });
+        }
+      }
+      
+      // If hovering over an original parent that has duplicates, highlight the duplicates too
+      allTreeNodes.forEach(treeNode => {
+        if (treeNode.id.includes('_parent_dup_for_') && treeNode.node.id === currentHoverId) {
+          directlyConnectedToHovered.add(treeNode.id);
+        }
+      });
+      
       // Also find friend connections from the original link data
       graphData.links.forEach(link => {
         if (link.type === 'friend') {
           const sourceId = typeof link.source === 'string' ? link.source : link.source.id;
           const targetId = typeof link.target === 'string' ? link.target : link.target.id;
           
-                    // If one end of the friend link is hovered, highlight the other end
+          // If one end of the friend link is hovered, highlight the other end
           if (sourceId === currentHoverId) {
             const targetTreeNode = allTreeNodes.find(tn => tn.id === targetId);
             if (targetTreeNode) {
@@ -583,9 +791,17 @@ export default function TreeView({
         return d.isRoot ? 1 : 0; // Only show white base circle for true root nodes or hovered nodes
       });
     
-    // Update main node circles
+    // Update main node circles - preserve duplicate name transparency
     nodeElements.selectAll<SVGCircleElement, TreeNode>(".main-circle")
-      .attr("opacity", 1);
+      .attr("opacity", (d: TreeNode) => {
+        // Apply transparency to nodes with duplicate names
+        const nodeName = d.node.name;
+        const nodesWithSameName = allTreeNodes.filter(node => node.node.name === nodeName);
+        if (nodesWithSameName.length > 1) {
+          return duplicateTransparency;
+        }
+        return 1;
+      });
 
     // Update link styles
     linkElements.attr("stroke", (d: Link) => {
@@ -684,9 +900,9 @@ export default function TreeView({
     // Create links based on the actual tree structure we've built
     allTreeNodes.forEach(treeNode => {
       if (treeNode.parent) {
-        // Find the original link type from graphData
+        // For duplicates, we need to look up the original node ID in graphData.links
         const originalParentId = treeNode.parent.id;
-        const originalChildId = treeNode.id;
+        const originalChildId = treeNode.id.includes('_dup_') ? treeNode.node.id : treeNode.id;
         
         const originalLink = graphData.links.find(link => {
           const sourceId = typeof link.source === 'string' ? link.source : link.source.id;
@@ -698,9 +914,35 @@ export default function TreeView({
           linkData.push({
             ...originalLink,
             source: treeNode.parent.node,
-            target: treeNode.node
-          });
+            target: treeNode.node,
+            // Store TreeNode IDs for proper positioning
+            sourceTreeNodeId: treeNode.parent.id,
+            targetTreeNodeId: treeNode.id
+          } as any);
         }
+      }
+      
+      // For parent duplicates, create links to their children (original child)
+      if (treeNode.id.includes('_parent_dup_for_') && treeNode.children.length > 0) {
+        treeNode.children.forEach(childTreeNode => {
+          // Find the original link for this parent-child relationship
+          const originalLink = graphData.links.find(link => {
+            const sourceId = typeof link.source === 'string' ? link.source : link.source.id;
+            const targetId = typeof link.target === 'string' ? link.target : link.target.id;
+            return (sourceId === treeNode.node.id && targetId === childTreeNode.node.id);
+          });
+          
+          if (originalLink) {
+            linkData.push({
+              ...originalLink,
+              source: treeNode.node,
+              target: childTreeNode.node,
+              // Store TreeNode IDs for proper positioning
+              sourceTreeNodeId: treeNode.id,
+              targetTreeNodeId: childTreeNode.id
+            } as any);
+          }
+        });
       }
     });
     
@@ -719,8 +961,11 @@ export default function TreeView({
           linkData.push({
             ...link,
             source: sourceTreeNode.node,
-            target: targetTreeNode.node
-          });
+            target: targetTreeNode.node,
+            // Store TreeNode IDs for proper positioning
+            sourceTreeNodeId: sourceTreeNode.id,
+            targetTreeNodeId: targetTreeNode.id
+          } as any);
         }
       }
     });
@@ -732,20 +977,22 @@ export default function TreeView({
       .join("line")
       .attr("stroke-width", (d: Link) => d.type === "parent-child" ? 2 : 1)
       .attr("stroke-dasharray", (d: Link) => d.type === "friend" ? "5,5" : null)
-      .attr("x1", (d) => {
-        const sourceTreeNode = allTreeNodes.find(tn => tn.node.id === (typeof d.source === 'string' ? d.source : d.source.id));
+      .attr("x1", (d: any) => {
+        // Use stored TreeNode ID for proper positioning
+        const sourceTreeNode = allTreeNodes.find(tn => tn.id === d.sourceTreeNodeId);
         return sourceTreeNode?.x || 0;
       })
-      .attr("y1", (d) => {
-        const sourceTreeNode = allTreeNodes.find(tn => tn.node.id === (typeof d.source === 'string' ? d.source : d.source.id));
+      .attr("y1", (d: any) => {
+        const sourceTreeNode = allTreeNodes.find(tn => tn.id === d.sourceTreeNodeId);
         return sourceTreeNode?.y || 0;
       })
-      .attr("x2", (d) => {
-        const targetTreeNode = allTreeNodes.find(tn => tn.node.id === (typeof d.target === 'string' ? d.target : d.target.id));
+      .attr("x2", (d: any) => {
+        // Use stored TreeNode ID for proper positioning
+        const targetTreeNode = allTreeNodes.find(tn => tn.id === d.targetTreeNodeId);
         return targetTreeNode?.x || 0;
       })
-      .attr("y2", (d) => {
-        const targetTreeNode = allTreeNodes.find(tn => tn.node.id === (typeof d.target === 'string' ? d.target : d.target.id));
+      .attr("y2", (d: any) => {
+        const targetTreeNode = allTreeNodes.find(tn => tn.id === d.targetTreeNodeId);
         return targetTreeNode?.y || 0;
       });
     
@@ -784,7 +1031,9 @@ export default function TreeView({
       .on("pointerover", function(event, d: TreeNode) {
         event.stopPropagation();
         if (enableHoverEffects) {
-          onHoveredNodeChange(d.id);
+          // For duplicates, use the original node ID for hover effects
+          const hoverNodeId = d.id.includes('_dup_') ? d.node.id : d.id;
+          onHoveredNodeChange(hoverNodeId);
         }
       })
       .on("pointerout", function(event, d: TreeNode) {
@@ -817,7 +1066,15 @@ export default function TreeView({
       .attr("r", 8)
       .attr("class", "main-circle")
       .attr("fill", (d: TreeNode) => d.node.color || "#999")
-      .attr("opacity", 1);
+             .attr("opacity", (d: TreeNode) => {
+         // Apply transparency to nodes with duplicate names
+         const nodeName = d.node.name;
+         const nodesWithSameName = allTreeNodes.filter(node => node.node.name === nodeName);
+         if (nodesWithSameName.length > 1) {
+           return duplicateNodeTransparency;
+         }
+         return 1;
+       });
 
     // Add text labels
     const textElements = nodeElements.append("text")
@@ -853,7 +1110,7 @@ export default function TreeView({
     }, true);
 
     // Apply initial visual styles for tree mode
-    updateTreeVisualStyles(hoveredNodeId, enableHoverEffects, allTreeNodes, linkElements, textElements, nodeElements);
+    updateTreeVisualStyles(hoveredNodeId, enableHoverEffects, allTreeNodes, linkElements, textElements, nodeElements, duplicateNodeTransparency);
     
     // Apply repulsion forces to prevent overlapping siblings
     applyTreeRepulsionForces(allTreeNodes, nodeElements);
@@ -872,10 +1129,11 @@ export default function TreeView({
         treeNodesRef.current,
         treeLinkElementsRef.current,
         treeTextElementsRef.current,
-        treeNodeElementsRef.current
+        treeNodeElementsRef.current,
+        duplicateNodeTransparency
       );
     }
-  }, [hoveredNodeId, enableHoverEffects]);
+  }, [hoveredNodeId, enableHoverEffects, duplicateNodeTransparency]);
 
   return null; // This component only handles D3 rendering
 }
