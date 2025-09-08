@@ -203,7 +203,15 @@ export default function MindMap({ initialGraphDataFromFolder, initialNodeId, map
       // Create new node
       const sourceNode = graphData.nodes.find(n => n.id === sourceId);
       const newNodeId = `node-${Date.now()}`;
-      const newLevel = sourceNode ? sourceNode.level + 1 : 0;
+      
+      // Calculate level based on command
+      let newLevel = sourceNode ? sourceNode.level : 0;
+      if (command === '>') {
+        newLevel = sourceNode ? sourceNode.level + 1 : 1; // Child is one level deeper
+      } else if (command === '<') {
+        newLevel = sourceNode ? Math.max(0, sourceNode.level - 1) : 0; // Parent is one level up
+      }
+      // For '=' (friend), keep the same level as source
       
       targetNode = {
         id: newNodeId,
@@ -230,10 +238,10 @@ export default function MindMap({ initialGraphDataFromFolder, initialNodeId, map
     });
     
     if (!existingLink) {
-      // Add new link
+      // Add new link with correct direction based on command
       const newLink: Link = {
-        source: sourceId,
-        target: targetNode.id,
+        source: command === '<' ? targetNode.id : sourceId,
+        target: command === '<' ? sourceId : targetNode.id,
         type: relationshipType
       };
       

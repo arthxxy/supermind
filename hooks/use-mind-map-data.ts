@@ -120,8 +120,8 @@ export function useMindMapData(
     }
 
     const newLink: Link = {
-      source: sourceId,
-      target: targetNode.id,
+      source: command === '<' ? targetNode.id : sourceId,
+      target: command === '<' ? sourceId : targetNode.id,
       type: command === "friend" ? "friend" : "parent-child"
     };
 
@@ -133,26 +133,32 @@ export function useMindMapData(
 
   const updateRelationship = useCallback((nodeId: string, oldType: string, newCommand: string, targetName: string) => {
     setGraphData((prev: GraphData) => {
-      const updatedLinks = prev.links.map((link: Link) => {
+      // Find the target node
+      const targetNode = prev.nodes.find(n => n.name === targetName);
+      if (!targetNode) return prev;
+
+      // Remove the old link
+      const filteredLinks = prev.links.filter((link: Link) => {
         const sourceId = typeof link.source === 'string' ? link.source : (link.source as Node).id;
         const targetId = typeof link.target === 'string' ? link.target : (link.target as Node).id;
         
-        if ((sourceId === nodeId && targetName === graphData.nodes.find(n => n.id === targetId)?.name) ||
-            (targetId === nodeId && targetName === graphData.nodes.find(n => n.id === sourceId)?.name)) {
-          return {
-            ...link,
-            type: (newCommand === "friend" ? "friend" : "parent-child") as "parent-child" | "friend"
-          };
-        }
-        return link;
+        return !((sourceId === nodeId && targetId === targetNode.id) ||
+                 (targetId === nodeId && sourceId === targetNode.id));
       });
+
+      // Add the new link with correct direction
+      const newLink: Link = {
+        source: newCommand === '<' ? targetNode.id : nodeId,
+        target: newCommand === '<' ? nodeId : targetNode.id,
+        type: (newCommand === "friend" ? "friend" : "parent-child") as "parent-child" | "friend"
+      };
 
       return {
         nodes: prev.nodes,
-        links: updatedLinks,
+        links: [...filteredLinks, newLink],
       };
     });
-  }, [graphData.nodes, setGraphData]);
+  }, [setGraphData]);
 
   const deleteRelationship = useCallback((nodeId: string, relType: string, targetName: string) => {
     setGraphData((prev: GraphData) => ({
