@@ -834,6 +834,14 @@ function htmlToMarkdown(html: string): string {
     }
   );
   
+  // Preserve visual line breaks created by block elements in contentEditable
+  // Add a newline when common block elements close
+  md = md.replace(/<\/(p|div|li|h[1-6]|ul|ol)>/gi, '\n');
+  // Ensure lists items start on a new line if the browser didn't insert BRs
+  // (avoid adding bullets here to keep existing logic; only preserve breaks)
+  md = md.replace(/<(ul|ol)[^>]*>/gi, '');
+  md = md.replace(/<li[^>]*>/gi, '');
+  // Convert explicit line breaks
   md = md.replace(/<br\s*\/?>(\s*)/gi, '\n');
   md = md.replace(/&nbsp;/gi, ' ');
   md = md.replace(/<strong>(.*?)<\/strong>/gi, '**$1**');
@@ -851,5 +859,22 @@ function htmlToMarkdown(html: string): string {
   md = md.replace(/<span[^>]*style="[^"]*text-decoration:\s*line-through[^">]*"[^>]*>(.*?)<\/span>/gi, '~~$1~~');
   // Remove remaining tags
   md = md.replace(/<[^>]+>/g, '');
+  
+  // Decode HTML entities AFTER removing tags so literal characters like '<'/'>' remain as text
+  // Numeric (decimal) entities
+  md = md.replace(/&#(\d+);/g, (_, code: string) => {
+    try { return String.fromCharCode(parseInt(code, 10)); } catch { return _; }
+  });
+  // Numeric (hex) entities
+  md = md.replace(/&#x([0-9a-fA-F]+);/g, (_, hex: string) => {
+    try { return String.fromCharCode(parseInt(hex, 16)); } catch { return _; }
+  });
+  // Named entities (common)
+  md = md.replace(/&lt;/gi, '<');
+  md = md.replace(/&gt;/gi, '>');
+  md = md.replace(/&quot;/gi, '"');
+  md = md.replace(/&apos;|&#39;/gi, "'");
+  // Decode &amp; last to avoid double decoding issues
+  md = md.replace(/&amp;/gi, '&');
   return md;
 } 
