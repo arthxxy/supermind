@@ -452,13 +452,14 @@ export default function TreeView({
             const availableLeft = (targetChild.angle ?? 0) - win.min;
             const availableRight = win.max - (targetChild.angle ?? 0);
             const dir = availableRight >= availableLeft ? 1 : -1;
-            const step = Math.min(availableRight, availableLeft) > 0 ? Math.min(0.06, Math.max(0.02, 0.25 * Math.min(availableLeft, availableRight))) : 0;
+            const stepBase = Math.min(availableRight, availableLeft);
+            const step = stepBase > 0 ? Math.min(0.2, Math.max(0.02, 0.5 * stepBase)) : 0;
 
             if (step > 0) {
               angleAdjust.set(targetChild.id, (angleAdjust.get(targetChild.id) || 0) + dir * step);
             } else {
               // No angular room left – bump radius slightly
-              radiusScale.set(targetChild.id, Math.max(1.0, (radiusScale.get(targetChild.id) || 1.0) * 1.05));
+              radiusScale.set(targetChild.id, Math.max(1.0, (radiusScale.get(targetChild.id) || 1.0) * 1.12));
             }
           }
         }
@@ -478,7 +479,9 @@ export default function TreeView({
         const currentAngle = Math.atan2(vy, vx);
         // Keep within sibling window
         const win = getSiblingWindow(node);
-        const newAngle = Math.max(win.min, Math.min(win.max, currentAngle + dAngle));
+        let newAngle = currentAngle + dAngle;
+        if (newAngle < win.min) newAngle = win.min + 1e-3;
+        if (newAngle > win.max) newAngle = win.max - 1e-3;
         const newR = currentR * rScale;
         node.angle = newAngle;
         node.x = px + newR * Math.cos(newAngle);
@@ -1281,6 +1284,9 @@ export default function TreeView({
     
     // Resolve parent-child crossings with a few local iterations
     resolveParentChildCrossings(allTreeNodes, 3);
+    // Update node visuals after adjustments
+    nodeElements.attr("transform", (d: TreeNode) => `translate(${d.x || 0},${d.y || 0})`);
+    // Then update link positions
     updateTreeLinkPositions(allTreeNodes);
 
   }, [graphData, intraGraphCompactness, interGraphCompactness, enableHoverEffects]);
