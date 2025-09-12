@@ -434,7 +434,7 @@ export default function TreeView({
             const e1 = edges[i], e2 = edges[j];
             if (!segmentsIntersect(e1, e2)) continue;
 
-            // Pick child to adjust: more angular slack wins
+            // Pick both children and try to separate them locally
             const child1 = allNodes.find(n => n.id === e1.childId)!;
             const child2 = allNodes.find(n => n.id === e2.childId)!;
             if (!child1.parent || !child2.parent) continue;
@@ -447,19 +447,36 @@ export default function TreeView({
             const s2Right = w2.max - (child2.angle ?? 0);
             const s2 = Math.max(0, s2Left, s2Right);
 
-            const targetChild = s1 >= s2 ? child1 : child2;
-            const win = s1 >= s2 ? w1 : w2;
-            const availableLeft = (targetChild.angle ?? 0) - win.min;
-            const availableRight = win.max - (targetChild.angle ?? 0);
-            const dir = availableRight >= availableLeft ? 1 : -1;
-            const stepBase = Math.min(availableRight, availableLeft);
-            const step = stepBase > 0 ? Math.min(0.2, Math.max(0.02, 0.5 * stepBase)) : 0;
+            // Determine push directions relative to other parent positions
+            const ang = (px: number, py: number, qx: number, qy: number) => Math.atan2(qy - py, qx - px);
+            const wrapPi = (a: number) => {
+              while (a > Math.PI) a -= 2 * Math.PI;
+              while (a < -Math.PI) a += 2 * Math.PI;
+              return a;
+            };
 
-            if (step > 0) {
-              angleAdjust.set(targetChild.id, (angleAdjust.get(targetChild.id) || 0) + dir * step);
+            const a1 = child1.angle ?? ang(child1.parent.x!, child1.parent.y!, child1.x!, child1.y!);
+            const a2 = child2.angle ?? ang(child2.parent.x!, child2.parent.y!, child2.x!, child2.y!);
+            const towardOther1 = ang(child1.parent.x!, child1.parent.y!, child2.parent.x!, child2.parent.y!);
+            const towardOther2 = ang(child2.parent.x!, child2.parent.y!, child1.parent.x!, child1.parent.y!);
+            const dir1 = Math.sign(wrapPi(a1 - towardOther1)) || 1;
+            const dir2 = Math.sign(wrapPi(a2 - towardOther2)) || -1;
+
+            // Steps limited by sibling windows
+            const avail1 = dir1 > 0 ? (w1.max - (child1.angle ?? 0)) : ((child1.angle ?? 0) - w1.min);
+            const avail2 = dir2 > 0 ? (w2.max - (child2.angle ?? 0)) : ((child2.angle ?? 0) - w2.min);
+            const step1 = avail1 > 0 ? Math.min(0.25, Math.max(0.02, 0.5 * avail1)) : 0;
+            const step2 = avail2 > 0 ? Math.min(0.25, Math.max(0.02, 0.5 * avail2)) : 0;
+
+            if (step1 > 0) {
+              angleAdjust.set(child1.id, (angleAdjust.get(child1.id) || 0) + dir1 * step1);
             } else {
-              // No angular room left – bump radius slightly
-              radiusScale.set(targetChild.id, Math.max(1.0, (radiusScale.get(targetChild.id) || 1.0) * 1.12));
+              radiusScale.set(child1.id, Math.max(1.0, (radiusScale.get(child1.id) || 1.0) * 1.1));
+            }
+            if (step2 > 0) {
+              angleAdjust.set(child2.id, (angleAdjust.get(child2.id) || 0) + dir2 * step2);
+            } else {
+              radiusScale.set(child2.id, Math.max(1.0, (radiusScale.get(child2.id) || 1.0) * 1.1));
             }
           }
         }
