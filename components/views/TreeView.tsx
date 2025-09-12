@@ -320,6 +320,173 @@ export default function TreeView({
     return allNodes;
   };
 
+  // Build list of parent-child edges from positioned nodes
+  type PcEdge = {
+    id: number;
+    parentId: string;
+    childId: string;
+    x1: number; y1: number; x2: number; y2: number;
+    minX: number; minY: number; maxX: number; maxY: number;
+  };
+
+  const buildParentChildEdges = (nodes: TreeNode[]): PcEdge[] => {
+    const edges: PcEdge[] = [];
+    let idx = 0;
+    nodes.forEach(child => {
+      const parent = child.parent;
+      if (!parent) return;
+      if (parent.x === undefined || parent.y === undefined || child.x === undefined || child.y === undefined) return;
+      const x1 = parent.x, y1 = parent.y, x2 = child.x, y2 = child.y;
+      const minX = Math.min(x1, x2), maxX = Math.max(x1, x2);
+      const minY = Math.min(y1, y2), maxY = Math.max(y1, y2);
+      edges.push({ id: idx++, parentId: parent.id, childId: child.id, x1, y1, x2, y2, minX, minY, maxX, maxY });
+    });
+    return edges;
+  };
+
+  // Segment intersection test using orientation predicates
+  const segmentsIntersect = (a: PcEdge, b: PcEdge): boolean => {
+    // Skip if sharing endpoints or same parent (siblings handled by layout)
+    if (a.parentId === b.parentId) return false;
+    if (a.parentId === b.childId || a.childId === b.parentId) return false;
+    if (a.childId === b.childId || a.parentId === b.parentId) return false;
+    // AABB quick reject
+    if (a.maxX < b.minX || b.maxX < a.minX || a.maxY < b.minY || b.maxY < a.minY) return false;
+    const { x1, y1, x2, y2 } = a;
+    const x3 = b.x1, y3 = b.y1, x4 = b.x2, y4 = b.y2;
+    const orient = (xA: number, yA: number, xB: number, yB: number, xC: number, yC: number) => {
+      const v = (yB - yA) * (xC - xB) - (xB - xA) * (yC - yB);
+      return Math.sign(v);
+    };
+    const o1 = orient(x1, y1, x2, y2, x3, y3);
+    const o2 = orient(x1, y1, x2, y2, x4, y4);
+    const o3 = orient(x3, y3, x4, y4, x1, y1);
+    const o4 = orient(x3, y3, x4, y4, x2, y2);
+    return (o1 !== o2) && (o3 !== o4);
+  };
+
+  // Uniform grid for near-linear intersection checks
+  const buildEdgeGrid = (edges: PcEdge[], cellSize: number) => {
+    const grid = new Map<string, number[]>();
+    const cellKey = (ix: number, iy: number) => `${ix},${iy}`;
+    edges.forEach((e, i) => {
+      const x0 = Math.floor(e.minX / cellSize), x1 = Math.floor(e.maxX / cellSize);
+      const y0 = Math.floor(e.minY / cellSize), y1 = Math.floor(e.maxY / cellSize);
+      for (let ix = x0; ix <= x1; ix++) {
+        for (let iy = y0; iy <= y1; iy++) {
+          const k = cellKey(ix, iy);
+          if (!grid.has(k)) grid.set(k, []);
+          grid.get(k)!.push(i);
+        }
+      }
+    });
+    return { grid, cellKey };
+  };
+
+  // Compute per-child sibling angle windows (no reordering within a parent)
+  const getSiblingWindow = (child: TreeNode): { min: number; max: number } => {
+    const parent = child.parent;
+    if (!parent) return { min: -Infinity, max: Infinity };
+    const sibs = parent.children.slice().filter(s => s.angle !== undefined) as TreeNode[];
+    if (sibs.length <= 1) return { min: -Infinity, max: Infinity };
+    sibs.sort((a, b) => (a.angle! - b.angle!));
+    const idx = sibs.findIndex(s => s.id === child.id);
+    const prev = idx > 0 ? sibs[idx - 1] : null;
+    const next = idx < sibs.length - 1 ? sibs[idx + 1] : null;
+    const cur = sibs[idx];
+    const lower = prev ? (prev.angle! + cur.angle!) / 2 : cur.angle! - Math.PI / 12; // small slack at ends
+    const upper = next ? (cur.angle! + next.angle!) / 2 : cur.angle! + Math.PI / 12;
+    return { min: lower, max: upper };
+  };
+
+  // Resolve parent-child edge crossings with a few local iterations
+  const resolveParentChildCrossings = (allNodes: TreeNode[], iterations: number = 3) => {
+    const cellSize = LEVEL_DISTANCE; // coarse grid
+    for (let iter = 0; iter < iterations; iter++) {
+      const edges = buildParentChildEdges(allNodes);
+      if (edges.length === 0) return;
+      const { grid, cellKey } = buildEdgeGrid(edges, cellSize);
+      const processedPairs = new Set<string>();
+      const angleAdjust = new Map<string, number>();
+      const radiusScale = new Map<string, number>();
+
+      const neighbors = [
+        [0,0],[1,0],[0,1],[-1,0],[0,-1],[1,1],[-1,1],[1,-1],[-1,-1]
+      ];
+
+      grid.forEach((edgeIdxs, key) => {
+        const [ixStr, iyStr] = key.split(",");
+        const ix = parseInt(ixStr, 10), iy = parseInt(iyStr, 10);
+        const localIdxs = new Set<number>();
+        neighbors.forEach(([dx, dy]) => {
+          const k = cellKey(ix + dx, iy + dy);
+          const arr = grid.get(k);
+          if (!arr) return;
+          arr.forEach(v => localIdxs.add(v));
+        });
+        const idxArr = Array.from(localIdxs.values());
+        for (let a = 0; a < idxArr.length; a++) {
+          for (let b = a + 1; b < idxArr.length; b++) {
+            const i = idxArr[a], j = idxArr[b];
+            const pairKey = i < j ? `${i}-${j}` : `${j}-${i}`;
+            if (processedPairs.has(pairKey)) continue;
+            processedPairs.add(pairKey);
+            const e1 = edges[i], e2 = edges[j];
+            if (!segmentsIntersect(e1, e2)) continue;
+
+            // Pick child to adjust: more angular slack wins
+            const child1 = allNodes.find(n => n.id === e1.childId)!;
+            const child2 = allNodes.find(n => n.id === e2.childId)!;
+            if (!child1.parent || !child2.parent) continue;
+            const w1 = getSiblingWindow(child1);
+            const w2 = getSiblingWindow(child2);
+            const s1Left = (child1.angle ?? 0) - w1.min;
+            const s1Right = w1.max - (child1.angle ?? 0);
+            const s1 = Math.max(0, s1Left, s1Right);
+            const s2Left = (child2.angle ?? 0) - w2.min;
+            const s2Right = w2.max - (child2.angle ?? 0);
+            const s2 = Math.max(0, s2Left, s2Right);
+
+            const targetChild = s1 >= s2 ? child1 : child2;
+            const win = s1 >= s2 ? w1 : w2;
+            const availableLeft = (targetChild.angle ?? 0) - win.min;
+            const availableRight = win.max - (targetChild.angle ?? 0);
+            const dir = availableRight >= availableLeft ? 1 : -1;
+            const step = Math.min(availableRight, availableLeft) > 0 ? Math.min(0.06, Math.max(0.02, 0.25 * Math.min(availableLeft, availableRight))) : 0;
+
+            if (step > 0) {
+              angleAdjust.set(targetChild.id, (angleAdjust.get(targetChild.id) || 0) + dir * step);
+            } else {
+              // No angular room left – bump radius slightly
+              radiusScale.set(targetChild.id, Math.max(1.0, (radiusScale.get(targetChild.id) || 1.0) * 1.05));
+            }
+          }
+        }
+      });
+
+      if (angleAdjust.size === 0 && radiusScale.size === 0) break;
+
+      // Apply adjustments
+      allNodes.forEach(node => {
+        if (!node.parent || node.x === undefined || node.y === undefined || node.parent.x === undefined || node.parent.y === undefined) return;
+        const dAngle = angleAdjust.get(node.id) || 0;
+        const rScale = radiusScale.get(node.id) || 1.0;
+        if (dAngle === 0 && rScale === 1.0) return;
+        const px = node.parent.x, py = node.parent.y;
+        const vx = node.x - px, vy = node.y - py;
+        const currentR = Math.hypot(vx, vy);
+        const currentAngle = Math.atan2(vy, vx);
+        // Keep within sibling window
+        const win = getSiblingWindow(node);
+        const newAngle = Math.max(win.min, Math.min(win.max, currentAngle + dAngle));
+        const newR = currentR * rScale;
+        node.angle = newAngle;
+        node.x = px + newR * Math.cos(newAngle);
+        node.y = py + newR * Math.sin(newAngle);
+      });
+    }
+  };
+
   // Position parent duplicates near their original child
   const positionParentDuplicates = (rootNode: TreeNode, allNodes: TreeNode[], levelDist: number) => {
     const visitedNodes = new Set<string>();
@@ -1112,10 +1279,8 @@ export default function TreeView({
     // Apply initial visual styles for tree mode
     updateTreeVisualStyles(hoveredNodeId, enableHoverEffects, allTreeNodes, linkElements, textElements, nodeElements, duplicateNodeTransparency);
     
-    // Apply repulsion forces to prevent overlapping siblings
-    applyTreeRepulsionForces(allTreeNodes, nodeElements);
-
-    // Update positions after repulsion
+    // Resolve parent-child crossings with a few local iterations
+    resolveParentChildCrossings(allTreeNodes, 3);
     updateTreeLinkPositions(allTreeNodes);
 
   }, [graphData, intraGraphCompactness, interGraphCompactness, enableHoverEffects]);
