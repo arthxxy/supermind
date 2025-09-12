@@ -1046,7 +1046,8 @@ export default function TreeView({
     const treeComponents = buildTreeStructure(graphData.nodes, graphData.links);
     const allTreeNodes: TreeNode[] = [];
     
-    // Layout each component
+    // Layout each component and keep per-component groups for post-spacing
+    const componentGroups: TreeNode[][] = [];
     treeComponents.forEach((treeRoots, componentIndex) => {
       if (treeRoots.length === 0) return;
       
@@ -1071,7 +1072,51 @@ export default function TreeView({
       // Layout this component
       const componentNodes = calculateTreeLayout(treeRoots, centerX, centerY);
       allTreeNodes.push(...componentNodes);
+      componentGroups.push(componentNodes);
     });
+
+    // Post-process: gently separate component groups to avoid inter-graph overlaps/crossings
+    const separateComponentGroups = (groups: TreeNode[][], iterations: number = 5) => {
+      const margin = 120; // extra space between components
+      for (let iter = 0; iter < iterations; iter++) {
+        let adjusted = false;
+        // Compute centers and radii
+        const centers = groups.map(nodes => {
+          let sx = 0, sy = 0;
+          nodes.forEach(n => { sx += (n.x || 0); sy += (n.y || 0); });
+          const cx = sx / Math.max(1, nodes.length);
+          const cy = sy / Math.max(1, nodes.length);
+          let r = 0;
+          nodes.forEach(n => { const dx = (n.x || 0) - cx; const dy = (n.y || 0) - cy; r = Math.max(r, Math.hypot(dx, dy)); });
+          return { cx, cy, r: r + margin };
+        });
+
+        for (let i = 0; i < groups.length; i++) {
+          for (let j = i + 1; j < groups.length; j++) {
+            const ci = centers[i], cj = centers[j];
+            const dx = cj.cx - ci.cx, dy = cj.cy - ci.cy;
+            const dist = Math.max(0.0001, Math.hypot(dx, dy));
+            const required = ci.r + cj.r;
+            if (dist < required) {
+              const overlap = (required - dist) * 0.6; // push 60% per iter
+              const ux = dx / dist, uy = dy / dist;
+              // Move groups in opposite directions
+              groups[i].forEach(n => { n.x = (n.x || 0) - ux * (overlap / 2); n.y = (n.y || 0) - uy * (overlap / 2); });
+              groups[j].forEach(n => { n.x = (n.x || 0) + ux * (overlap / 2); n.y = (n.y || 0) + uy * (overlap / 2); });
+              // Update centers locally for faster convergence
+              centers[i].cx -= ux * (overlap / 2); centers[i].cy -= uy * (overlap / 2);
+              centers[j].cx += ux * (overlap / 2); centers[j].cy += uy * (overlap / 2);
+              adjusted = true;
+            }
+          }
+        }
+        if (!adjusted) break;
+      }
+    };
+
+    if (componentGroups.length > 1) {
+      separateComponentGroups(componentGroups, 6);
+    }
 
     // Store tree nodes reference
     treeNodesRef.current = allTreeNodes;
