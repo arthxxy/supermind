@@ -56,7 +56,7 @@ export default function MindMap({ initialGraphDataFromFolder, initialNodeId, map
   // View settings
   const [viewMode, setViewMode] = useState<'force' | 'tree'>('force')
   const [intraGraphCompactness, setIntraGraphCompactness] = useState<number>(5)
-  const [interGraphCompactness, setInterGraphCompactness] = useState<number>(10)
+  const [interGraphCompactness, setInterGraphCompactness] = useState<number>(5)
   const [showSettings, setShowSettings] = useState<boolean>(false)
   const [enableHoverEffects, setEnableHoverEffects] = useState<boolean>(true)
   const [duplicateNodeTransparency, setDuplicateNodeTransparency] = useState<number>(0.9) // 10% more transparent (90% opacity)
@@ -563,7 +563,7 @@ export default function MindMap({ initialGraphDataFromFolder, initialNodeId, map
                 />
                 <span className="text-sm text-gray-400 w-8 text-right">{interGraphCompactness.toFixed(1)}</span>
               </div>
-              <p className="text-xs text-gray-500 mt-1">0 = very separated, 10 = very tight graphs.</p>
+              <p className="text-xs text-gray-500 mt-1">0 = very tight, 10 = very separated graphs.</p>
             </div>
 
 

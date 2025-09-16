@@ -1054,13 +1054,20 @@ export default function TreeView({
       // Calculate center position for this component with improved spacing
       const angle = (2 * Math.PI / treeComponents.length) * componentIndex;
       
-      // Improved inter-component distance calculation (similar to ForceView but adapted for tree layout)
+      // Improved inter-component distance calculation with remapped scale
+      // Remap 0-10 scale: 0 = very tight (old 10), 10 = very separated (old 0)
+      const remappedCompactness = 10 - interGraphCompactness;
       const numComponents = treeComponents.length;
-      const effectiveInterGraphDivisor = Math.max(1, interGraphCompactness);
-      const interGraphSpacingDivisor = effectiveInterGraphDivisor * 2.0; // Adjusted for tree layout
       
-      // Higher minimum separation for tree layout (trees need more space than force layouts)
-      const minComponentSeparation = 600; // Doubled minimum distance for tree layouts
+      // Create good progression: at 0 (tightest), divisor = 10; at 10 (loosest), divisor = 1
+      const effectiveInterGraphDivisor = Math.max(1, 1 + remappedCompactness * 0.9);
+      const interGraphSpacingDivisor = effectiveInterGraphDivisor * 2.0;
+      
+      // Adjust minimum separation based on compactness for better range
+      const baseMinSeparation = 300; // Lower base for tighter packing
+      const separationMultiplier = 1 + (remappedCompactness / 10) * 2; // 1x to 3x range
+      const minComponentSeparation = baseMinSeparation * separationMultiplier;
+      
       const compDistance = treeComponents.length > 1 ? Math.max(
         minComponentSeparation,
         (Math.min(width, height) / interGraphSpacingDivisor) * (Math.log(numComponents + 1) || 1)
