@@ -600,6 +600,85 @@ export default function TreeView({
     friendNode.distance = Math.sqrt(friendNode.x * friendNode.x + friendNode.y * friendNode.y);
   };
 
+  // --- Lightweight spatial-hash de-overlap utilities ---
+  const estimateLabelWidth = (name?: string, fontSize: number = BASE_SVG_FONT_SIZE): number => {
+    const text = name || "";
+    // rough width estimate: 0.6 * fontSize per char, clamped
+    return Math.max(20, Math.min(220, text.length * fontSize * 0.6));
+  };
+
+  const getEffectiveNodeRadius = (n: TreeNode): number => {
+    const labelW = estimateLabelWidth(n.node?.name, n.node?.textStyle?.fontSize || BASE_SVG_FONT_SIZE);
+    const margin = 4; // minimal readable gap
+    return Math.max(NODE_RADIUS, labelW * 0.5) + margin;
+  };
+
+  type SpatialIndex = Map<string, number[]>;
+  const cellKey = (ix: number, iy: number) => `${ix},${iy}`;
+
+  const buildSpatialIndex = (nodes: TreeNode[], cellSize: number): SpatialIndex => {
+    const buckets: SpatialIndex = new Map();
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i];
+      const x = n.x || 0, y = n.y || 0;
+      const ix = Math.floor(x / cellSize);
+      const iy = Math.floor(y / cellSize);
+      const k = cellKey(ix, iy);
+      if (!buckets.has(k)) buckets.set(k, []);
+      buckets.get(k)!.push(i);
+    }
+    return buckets;
+  };
+
+  const runDeOverlapPass = (nodes: TreeNode[]) => {
+    if (nodes.length === 0) return;
+    // Choose cell size from typical label/node size
+    const typicalLabel = estimateLabelWidth("MMMMMM");
+    const cellSize = Math.max(2 * NODE_RADIUS + 8, typicalLabel + 12);
+    const buckets = buildSpatialIndex(nodes, cellSize);
+    const processed = new Set<string>();
+
+    const neighborOffsets = [-1, 0, 1];
+    for (let i = 0; i < nodes.length; i++) {
+      const a = nodes[i];
+      if (a.x === undefined || a.y === undefined) continue;
+      const ix = Math.floor(a.x / cellSize);
+      const iy = Math.floor(a.y / cellSize);
+      const rA = getEffectiveNodeRadius(a);
+      for (let dx of neighborOffsets) {
+        for (let dy of neighborOffsets) {
+          const arr = buckets.get(cellKey(ix + dx, iy + dy));
+          if (!arr) continue;
+          for (const j of arr) {
+            if (j <= i) continue; // process each pair once
+            const b = nodes[j];
+            if (b.x === undefined || b.y === undefined) continue;
+            const pairKey = i < j ? `${i}|${j}` : `${j}|${i}`;
+            if (processed.has(pairKey)) continue;
+            processed.add(pairKey);
+            const rB = getEffectiveNodeRadius(b);
+            const dxAB: number = (a.x! - b.x!);
+            const dyAB: number = (a.y! - b.y!);
+            const dist2: number = dxAB * dxAB + dyAB * dyAB;
+            const minDist = rA + rB;
+            if (dist2 < minDist * minDist) {
+              let dist: number = Math.sqrt(Math.max(1e-9, dist2));
+              let ux: number = dxAB / (dist || 1);
+              let uy: number = dyAB / (dist || 1);
+              const overlap = minDist - dist;
+              const push = overlap * 0.5;
+              // Symmetric minimal separation
+              a.x = (a.x || 0) + ux * push;
+              a.y = (a.y || 0) + uy * push;
+              b.x = (b.x || 0) - ux * push;
+              b.y = (b.y || 0) - uy * push;
+            }
+          }
+        }
+      }
+    }
+  };
+
   // Layout a subtree recursively
   const layoutSubtree = (parent: TreeNode, startAngle: number, endAngle: number, allNodes: TreeNode[], levelDist: number) => {
     if (parent.children.length === 0) return;
@@ -1347,6 +1426,9 @@ export default function TreeView({
         onBackgroundClick();
       }
     }, true);
+
+    // One lightweight de-overlap pass after layout (keeps nodes readable with minimal movement)
+    runDeOverlapPass(allTreeNodes);
 
     // Apply initial visual styles for tree mode
     updateTreeVisualStyles(hoveredNodeId, enableHoverEffects, allTreeNodes, linkElements, textElements, nodeElements, duplicateNodeTransparency);
