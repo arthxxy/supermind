@@ -1346,7 +1346,8 @@ export default function TreeView({
       .join("g")
       .attr("class", "node")
       .attr("transform", (d: TreeNode) => `translate(${d.x || 0},${d.y || 0})`)
-      .call(d3.drag<SVGGElement, TreeNode>()
+      .style("cursor", "grab")
+      .call(d3.drag<SVGGElement, TreeNode>().filter(() => true)
         .on("start", (event: any, d: TreeNode) => {
           // Prevent native text selection while dragging (especially when Ctrl is held)
           if (event?.sourceEvent?.preventDefault) event.sourceEvent.preventDefault();
@@ -1365,6 +1366,7 @@ export default function TreeView({
         })
         .on("drag", function(event: any, d: TreeNode) {
           if (event?.sourceEvent?.preventDefault) event.sourceEvent.preventDefault();
+          if (event?.sourceEvent?.stopPropagation) event.sourceEvent.stopPropagation();
           const state = dragStateRef.current;
           if (state && state.mode === 'subtree') {
             const dx = event.x - state.rootStart.x;
@@ -1388,6 +1390,8 @@ export default function TreeView({
           }
         })
         .on("end", (event: any, d: TreeNode) => {
+          if (event?.sourceEvent?.preventDefault) event.sourceEvent.preventDefault();
+          if (event?.sourceEvent?.stopPropagation) event.sourceEvent.stopPropagation();
           dragStateRef.current = null;
           onTreePositionsSave(allTreeNodes);
         })
