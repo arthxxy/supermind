@@ -1348,6 +1348,9 @@ export default function TreeView({
       .attr("transform", (d: TreeNode) => `translate(${d.x || 0},${d.y || 0})`)
       .call(d3.drag<SVGGElement, TreeNode>()
         .on("start", (event: any, d: TreeNode) => {
+          // Prevent native text selection while dragging (especially when Ctrl is held)
+          if (event?.sourceEvent?.preventDefault) event.sourceEvent.preventDefault();
+          if (event?.sourceEvent?.stopPropagation) event.sourceEvent.stopPropagation();
           const isCtrl = !!(event?.sourceEvent?.ctrlKey || event?.sourceEvent?.metaKey);
           const subtree = isCtrl ? collectSubtreeNodes(d) : [d];
           const initial = new Map<string, { x: number; y: number }>();
@@ -1361,6 +1364,7 @@ export default function TreeView({
           };
         })
         .on("drag", function(event: any, d: TreeNode) {
+          if (event?.sourceEvent?.preventDefault) event.sourceEvent.preventDefault();
           const state = dragStateRef.current;
           if (state && state.mode === 'subtree') {
             const dx = event.x - state.rootStart.x;
@@ -1443,6 +1447,11 @@ export default function TreeView({
       .attr("dx", 0).attr("dy", 20).attr("text-anchor", "middle")
       .attr("fill", "white")
       .attr("font-family", "sans-serif")
+      // Prevent text selection from hijacking drag gestures
+      .style("user-select", "none")
+      .style("-webkit-user-select", "none")
+      .style("-ms-user-select", "none")
+      .style("pointer-events", "none")
       .each(function(d: TreeNode) {
         const styles = parseMarkdownAndApplyStyles(d.node.name, d.node.textStyle);
         d3.select(this)
