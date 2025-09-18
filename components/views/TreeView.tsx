@@ -45,6 +45,13 @@ export default function TreeView({
   const treeLinkElementsRef = useRef<d3.Selection<SVGLineElement, Link, SVGGElement, unknown> | null>(null);
   const treeTextElementsRef = useRef<d3.Selection<SVGTextElement, TreeNode, SVGGElement, unknown> | null>(null);
   const treeNodeElementsRef = useRef<d3.Selection<SVGGElement, TreeNode, SVGGElement, unknown> | null>(null);
+  const dragStateRef = useRef<{
+    mode: 'single' | 'subtree';
+    rootId: string;
+    subtree: TreeNode[];
+    initial: Map<string, { x: number; y: number }>;
+    rootStart: { x: number; y: number };
+  } | null>(null);
 
 
 
@@ -545,6 +552,21 @@ export default function TreeView({
     };
     
     positionDuplicatesRecursively(rootNode);
+  };
+
+  // Collect a node with all descendants (subtree)
+  const collectSubtreeNodes = (root: TreeNode): TreeNode[] => {
+    const result: TreeNode[] = [];
+    const stack: TreeNode[] = [root];
+    const seen = new Set<string>();
+    while (stack.length) {
+      const n = stack.pop()!;
+      if (seen.has(n.id)) continue;
+      seen.add(n.id);
+      result.push(n);
+      n.children.forEach(c => stack.push(c));
+    }
+    return result;
   };
 
   // Position friend-only node near its friend connections
@@ -1325,22 +1347,44 @@ export default function TreeView({
       .attr("class", "node")
       .attr("transform", (d: TreeNode) => `translate(${d.x || 0},${d.y || 0})`)
       .call(d3.drag<SVGGElement, TreeNode>()
-        .on("start", (event, d: TreeNode) => {
-          // Store initial position for dragging
-          event.subject.fx = d.x ?? 0;
-          event.subject.fy = d.y ?? 0;
+        .on("start", (event: any, d: TreeNode) => {
+          const isCtrl = !!(event?.sourceEvent?.ctrlKey || event?.sourceEvent?.metaKey);
+          const subtree = isCtrl ? collectSubtreeNodes(d) : [d];
+          const initial = new Map<string, { x: number; y: number }>();
+          subtree.forEach(n => initial.set(n.id, { x: n.x || 0, y: n.y || 0 }));
+          dragStateRef.current = {
+            mode: isCtrl ? 'subtree' : 'single',
+            rootId: d.id,
+            subtree,
+            initial,
+            rootStart: { x: d.x || 0, y: d.y || 0 }
+          };
         })
-        .on("drag", function(event, d: TreeNode) {
-          // Update TreeNode position
-          d.x = event.x;
-          d.y = event.y;
-          // Update visual position
-          d3.select(this).attr("transform", `translate(${d.x},${d.y})`);
-          // Update link positions
-          updateTreeLinkPositions(allTreeNodes);
+        .on("drag", function(event: any, d: TreeNode) {
+          const state = dragStateRef.current;
+          if (state && state.mode === 'subtree') {
+            const dx = event.x - state.rootStart.x;
+            const dy = event.y - state.rootStart.y;
+            state.subtree.forEach(n => {
+              const p = state.initial.get(n.id)!;
+              n.x = p.x + dx;
+              n.y = p.y + dy;
+            });
+            // Update all node visuals for consistency
+            if (treeNodeElementsRef.current) {
+              treeNodeElementsRef.current.attr("transform", (tn: TreeNode) => `translate(${tn.x || 0},${tn.y || 0})`);
+            }
+            updateTreeLinkPositions(allTreeNodes);
+          } else {
+            // Single-node drag (default)
+            d.x = event.x;
+            d.y = event.y;
+            d3.select(this).attr("transform", `translate(${d.x},${d.y})`);
+            updateTreeLinkPositions(allTreeNodes);
+          }
         })
-        .on("end", (event, d: TreeNode) => {
-          // Save tree layout positions after dragging
+        .on("end", (event: any, d: TreeNode) => {
+          dragStateRef.current = null;
           onTreePositionsSave(allTreeNodes);
         })
       )
