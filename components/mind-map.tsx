@@ -79,6 +79,7 @@ export default function MindMap({ initialGraphDataFromFolder, initialNodeId, map
     restoreTreePositions,
     hasCompactnessChanged,
     clearTreePositions,
+    importTreePositions,
   } = useViewPositions()
 
   // Load initial node if initialNodeId is provided
@@ -393,7 +394,10 @@ export default function MindMap({ initialGraphDataFromFolder, initialNodeId, map
         }
         return n;
       });
+      const treePositionsObj: Record<string, { x: number; y: number }> = {};
+      treePositions.forEach((pos, id) => { treePositionsObj[id] = pos; });
       dataForSave = { ...graphData, nodes: nodesWithTreeXY } as GraphData;
+      (dataForSave as any).treePositions = treePositionsObj;
     }
     const dataStr = JSON.stringify(dataForSave, null, 2)
     const blob = new Blob([dataStr], { type: 'application/json' })
@@ -421,6 +425,9 @@ export default function MindMap({ initialGraphDataFromFolder, initialNodeId, map
           target: nodeMap.get(typeof link.target === 'string' ? link.target : link.target.id),
         }))
         setGraphData({ nodes, links })
+        if (parsed.treePositions) {
+          importTreePositions(parsed.treePositions)
+        }
         alert('Mind map loaded!')
       } catch (e) {
         alert('Failed to load mind map.')

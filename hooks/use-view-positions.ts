@@ -86,6 +86,30 @@ export function useViewPositions() {
     }));
   }, []);
 
+  // Import tree positions from JSON (supports exact Tree View replay including duplicates)
+  const importTreePositions = useCallback((raw: any) => {
+    try {
+      const treePositions = new Map<string, { x: number; y: number }>();
+      if (Array.isArray(raw)) {
+        raw.forEach((entry: any) => {
+          if (entry && typeof entry.id === 'string' && typeof entry.x === 'number' && typeof entry.y === 'number') {
+            treePositions.set(entry.id, { x: entry.x, y: entry.y });
+          }
+        });
+      } else if (raw && typeof raw === 'object') {
+        Object.keys(raw).forEach((id: string) => {
+          const p = raw[id];
+          if (p && typeof p.x === 'number' && typeof p.y === 'number') {
+            treePositions.set(id, { x: p.x, y: p.y });
+          }
+        });
+      }
+      if (treePositions.size > 0) {
+        setViewPositions(prev => ({ ...prev, tree: treePositions }));
+      }
+    } catch {}
+  }, []);
+
   return {
     viewPositions,
     saveForcePositions,
@@ -94,6 +118,7 @@ export function useViewPositions() {
     restoreTreePositions,
     hasCompactnessChanged,
     clearTreePositions,
+    importTreePositions,
   };
 }
 
