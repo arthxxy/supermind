@@ -597,7 +597,10 @@ export default function MindMap({ initialGraphDataFromFolder, initialNodeId, map
                 <input
                   type="checkbox"
                   checked={useTreeRawPositions}
-                  onChange={(e) => setUseTreeRawPositions(e.target.checked)}
+                  onChange={(e) => {
+                    // Toggle raw mode without switching view; keep current viewMode intact
+                    setUseTreeRawPositions(e.target.checked)
+                  }}
                   className="form-checkbox h-5 w-5 text-blue-500 bg-gray-700 border-gray-600 rounded focus:ring-blue-600"
                 />
               </label>

@@ -1159,8 +1159,10 @@ export default function TreeView({
       const pushNode = (tn: TreeNode) => {
         if (seen.has(tn.id)) return;
         seen.add(tn.id);
+        // Prefer explicit saved Tree View position for this TreeNode id (includes duplicates)
+        const saved = savedPositions.tree.get(tn.id);
         const baseId = (tn.id.includes('_dup_') || tn.id.includes('_parent_dup_for_')) ? tn.node.id : tn.id;
-        const pos = coordMap.get(baseId) || { x: 0, y: 0 };
+        const pos = saved || coordMap.get(baseId) || { x: 0, y: 0 };
         tn.x = pos.x; tn.y = pos.y; tn.distance = Math.hypot(pos.x, pos.y);
         allTreeNodes.push(tn);
         tn.children.forEach(child => pushNode(child));
