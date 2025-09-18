@@ -19,6 +19,7 @@ const {
 interface TreeViewProps extends ViewProps {
   onTreePositionsSave: (treeNodes: TreeNode[]) => void;
   onTreePositionsRestore: (treeNodes: TreeNode[]) => void;
+  useTreeRawPositions?: boolean; // if true, skip layout and use node.x/y from JSON
 }
 
 export default function TreeView({
@@ -39,7 +40,8 @@ export default function TreeView({
   onBackgroundClick,
   onTreePositionsSave,
   onTreePositionsRestore,
-  savedPositions
+  savedPositions,
+  useTreeRawPositions
 }: TreeViewProps) {
   const treeNodesRef = useRef<TreeNode[]>([]);
   const treeLinkElementsRef = useRef<d3.Selection<SVGLineElement, Link, SVGGElement, unknown> | null>(null);
@@ -1147,84 +1149,103 @@ export default function TreeView({
     const treeComponents = buildTreeStructure(graphData.nodes, graphData.links);
     const allTreeNodes: TreeNode[] = [];
     
-    // Layout each component and keep per-component groups for post-spacing
-    const componentGroups: TreeNode[][] = [];
-    treeComponents.forEach((treeRoots, componentIndex) => {
-      if (treeRoots.length === 0) return;
-      
-      // Calculate center position for this component with improved spacing
-      const angle = (2 * Math.PI / treeComponents.length) * componentIndex;
-      
-      // Improved inter-component distance calculation with remapped scale
-      // Remap 0-10 scale: 0 = very tight (old 10), 10 = very separated (old 0)
-      const remappedCompactness = 10 - interGraphCompactness;
-      const numComponents = treeComponents.length;
-      
-      // Create good progression: at 0 (tightest), divisor = 10; at 10 (loosest), divisor = 1
-      const effectiveInterGraphDivisor = Math.max(1, 1 + remappedCompactness * 0.9);
-      const interGraphSpacingDivisor = effectiveInterGraphDivisor * 2.0;
-      
-      // Adjust minimum separation based on compactness for better range
-      const baseMinSeparation = 300; // Lower base for tighter packing
-      const separationMultiplier = 1 + (remappedCompactness / 10) * 2; // 1x to 3x range
-      const minComponentSeparation = baseMinSeparation * separationMultiplier;
-      
-      const compDistance = treeComponents.length > 1 ? Math.max(
-        minComponentSeparation,
-        (Math.min(width, height) / interGraphSpacingDivisor) * (Math.log(numComponents + 1) || 1)
-      ) : 0;
-      
-      const centerX = treeComponents.length > 1 ? compDistance * Math.cos(angle) : 0;
-      const centerY = treeComponents.length > 1 ? compDistance * Math.sin(angle) : 0;
-      
-      // Layout this component
-      const componentNodes = calculateTreeLayout(treeRoots, centerX, centerY);
-      allTreeNodes.push(...componentNodes);
-      componentGroups.push(componentNodes);
-    });
+    if (useTreeRawPositions) {
+      // Raw mode: no layout. Use node.x/y from JSON for all TreeNodes
+      const coordMap = new Map<string, { x: number; y: number }>();
+      graphData.nodes.forEach(n => {
+        if (n.x !== undefined && n.y !== undefined) coordMap.set(n.id, { x: n.x, y: n.y });
+      });
+      const seen = new Set<string>();
+      const pushNode = (tn: TreeNode) => {
+        if (seen.has(tn.id)) return;
+        seen.add(tn.id);
+        const baseId = (tn.id.includes('_dup_') || tn.id.includes('_parent_dup_for_')) ? tn.node.id : tn.id;
+        const pos = coordMap.get(baseId) || { x: 0, y: 0 };
+        tn.x = pos.x; tn.y = pos.y; tn.distance = Math.hypot(pos.x, pos.y);
+        allTreeNodes.push(tn);
+        tn.children.forEach(child => pushNode(child));
+      };
+      treeComponents.forEach(roots => roots.forEach(root => pushNode(root)));
+    } else {
+      // Layout each component and keep per-component groups for post-spacing
+      const componentGroups: TreeNode[][] = [];
+      treeComponents.forEach((treeRoots, componentIndex) => {
+        if (treeRoots.length === 0) return;
+        
+        // Calculate center position for this component with improved spacing
+        const angle = (2 * Math.PI / treeComponents.length) * componentIndex;
+        
+        // Improved inter-component distance calculation with remapped scale
+        // Remap 0-10 scale: 0 = very tight (old 10), 10 = very separated (old 0)
+        const remappedCompactness = 10 - interGraphCompactness;
+        const numComponents = treeComponents.length;
+        
+        // Create good progression: at 0 (tightest), divisor = 10; at 10 (loosest), divisor = 1
+        const effectiveInterGraphDivisor = Math.max(1, 1 + remappedCompactness * 0.9);
+        const interGraphSpacingDivisor = effectiveInterGraphDivisor * 2.0;
+        
+        // Adjust minimum separation based on compactness for better range
+        const baseMinSeparation = 300; // Lower base for tighter packing
+        const separationMultiplier = 1 + (remappedCompactness / 10) * 2; // 1x to 3x range
+        const minComponentSeparation = baseMinSeparation * separationMultiplier;
+        
+        const compDistance = treeComponents.length > 1 ? Math.max(
+          minComponentSeparation,
+          (Math.min(width, height) / interGraphSpacingDivisor) * (Math.log(numComponents + 1) || 1)
+        ) : 0;
+        
+        const centerX = treeComponents.length > 1 ? compDistance * Math.cos(angle) : 0;
+        const centerY = treeComponents.length > 1 ? compDistance * Math.sin(angle) : 0;
+        
+        // Layout this component
+        const componentNodes = calculateTreeLayout(treeRoots, centerX, centerY);
+        allTreeNodes.push(...componentNodes);
+        componentGroups.push(componentNodes);
+      });
+      // Post-process: gently separate component groups to avoid inter-graph overlaps/crossings
+      const separateComponentGroups = (groups: TreeNode[][], iterations: number = 5) => {
+        const margin = 120; // extra space between components
+        for (let iter = 0; iter < iterations; iter++) {
+          let adjusted = false;
+          // Compute centers and radii
+          const centers = groups.map(nodes => {
+            let sx = 0, sy = 0;
+            nodes.forEach(n => { sx += (n.x || 0); sy += (n.y || 0); });
+            const cx = sx / Math.max(1, nodes.length);
+            const cy = sy / Math.max(1, nodes.length);
+            let r = 0;
+            nodes.forEach(n => { const dx = (n.x || 0) - cx; const dy = (n.y || 0) - cy; r = Math.max(r, Math.hypot(dx, dy)); });
+            return { cx, cy, r: r + margin };
+          });
 
-    // Post-process: gently separate component groups to avoid inter-graph overlaps/crossings
-    const separateComponentGroups = (groups: TreeNode[][], iterations: number = 5) => {
-      const margin = 120; // extra space between components
-      for (let iter = 0; iter < iterations; iter++) {
-        let adjusted = false;
-        // Compute centers and radii
-        const centers = groups.map(nodes => {
-          let sx = 0, sy = 0;
-          nodes.forEach(n => { sx += (n.x || 0); sy += (n.y || 0); });
-          const cx = sx / Math.max(1, nodes.length);
-          const cy = sy / Math.max(1, nodes.length);
-          let r = 0;
-          nodes.forEach(n => { const dx = (n.x || 0) - cx; const dy = (n.y || 0) - cy; r = Math.max(r, Math.hypot(dx, dy)); });
-          return { cx, cy, r: r + margin };
-        });
-
-        for (let i = 0; i < groups.length; i++) {
-          for (let j = i + 1; j < groups.length; j++) {
-            const ci = centers[i], cj = centers[j];
-            const dx = cj.cx - ci.cx, dy = cj.cy - ci.cy;
-            const dist = Math.max(0.0001, Math.hypot(dx, dy));
-            const required = ci.r + cj.r;
-            if (dist < required) {
-              const overlap = (required - dist) * 0.6; // push 60% per iter
-              const ux = dx / dist, uy = dy / dist;
-              // Move groups in opposite directions
-              groups[i].forEach(n => { n.x = (n.x || 0) - ux * (overlap / 2); n.y = (n.y || 0) - uy * (overlap / 2); });
-              groups[j].forEach(n => { n.x = (n.x || 0) + ux * (overlap / 2); n.y = (n.y || 0) + uy * (overlap / 2); });
-              // Update centers locally for faster convergence
-              centers[i].cx -= ux * (overlap / 2); centers[i].cy -= uy * (overlap / 2);
-              centers[j].cx += ux * (overlap / 2); centers[j].cy += uy * (overlap / 2);
-              adjusted = true;
+          for (let i = 0; i < groups.length; i++) {
+            for (let j = i + 1; j < groups.length; j++) {
+              const ci = centers[i], cj = centers[j];
+              const dx = cj.cx - ci.cx, dy = cj.cy - ci.cy;
+              const dist = Math.max(0.0001, Math.hypot(dx, dy));
+              const required = ci.r + cj.r;
+              if (dist < required) {
+                const overlap = (required - dist) * 0.6; // push 60% per iter
+                const ux = dx / dist, uy = dy / dist;
+                // Move groups in opposite directions
+                groups[i].forEach(n => { n.x = (n.x || 0) - ux * (overlap / 2); n.y = (n.y || 0) - uy * (overlap / 2); });
+                groups[j].forEach(n => { n.x = (n.x || 0) + ux * (overlap / 2); n.y = (n.y || 0) + uy * (overlap / 2); });
+                // Update centers locally for faster convergence
+                centers[i].cx -= ux * (overlap / 2); centers[i].cy -= uy * (overlap / 2);
+                centers[j].cx += ux * (overlap / 2); centers[j].cy += uy * (overlap / 2);
+                adjusted = true;
+              }
             }
           }
+          if (!adjusted) break;
         }
-        if (!adjusted) break;
+      };
+      if (componentGroups.length > 1) {
+        separateComponentGroups(componentGroups, 6);
       }
-    };
-
-    if (componentGroups.length > 1) {
-      separateComponentGroups(componentGroups, 6);
     }
+
+    
 
     // Store tree nodes reference
     treeNodesRef.current = allTreeNodes;
@@ -1484,14 +1505,18 @@ export default function TreeView({
       }
     }, true);
 
-    // One lightweight de-overlap pass after layout (keeps nodes readable with minimal movement)
-    runDeOverlapPass(allTreeNodes);
+    if (!useTreeRawPositions) {
+      // One lightweight de-overlap pass after layout (keeps nodes readable with minimal movement)
+      runDeOverlapPass(allTreeNodes);
+    }
 
     // Apply initial visual styles for tree mode
     updateTreeVisualStyles(hoveredNodeId, enableHoverEffects, allTreeNodes, linkElements, textElements, nodeElements, duplicateNodeTransparency);
     
-    // Resolve parent-child crossings with a few local iterations
-    resolveParentChildCrossings(allTreeNodes, 3);
+    if (!useTreeRawPositions) {
+      // Resolve parent-child crossings with a few local iterations
+      resolveParentChildCrossings(allTreeNodes, 3);
+    }
     // Update node visuals after adjustments
     nodeElements.attr("transform", (d: TreeNode) => `translate(${d.x || 0},${d.y || 0})`);
     // Then update link positions

@@ -62,6 +62,8 @@ export default function MindMap({ initialGraphDataFromFolder, initialNodeId, map
   const [duplicateNodeTransparency, setDuplicateNodeTransparency] = useState<number>(0.9) // 10% more transparent (90% opacity)
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null)
   const [isZooming, setIsZooming] = useState<boolean>(false)
+  // Tree raw positioning toggle
+  const [useTreeRawPositions, setUseTreeRawPositions] = useState<boolean>(false)
 
 
   // Refs
@@ -461,6 +463,7 @@ export default function MindMap({ initialGraphDataFromFolder, initialNodeId, map
           savedPositions={viewPositions}
           onTreePositionsSave={(treeNodes) => saveTreePositions(treeNodes, intraGraphCompactness, interGraphCompactness)}
           onTreePositionsRestore={restoreTreePositions}
+          useTreeRawPositions={useTreeRawPositions}
         />
       )}
 
@@ -567,6 +570,21 @@ export default function MindMap({ initialGraphDataFromFolder, initialNodeId, map
             </div>
 
 
+
+            <div className="mt-4 pt-4 border-t border-gray-700">
+              <label className="flex items-center justify-between text-sm font-medium text-gray-300">
+                <span>Tree View: Use raw JSON positions</span>
+                <input
+                  type="checkbox"
+                  checked={useTreeRawPositions}
+                  onChange={(e) => setUseTreeRawPositions(e.target.checked)}
+                  className="form-checkbox h-5 w-5 text-blue-500 bg-gray-700 border-gray-600 rounded focus:ring-blue-600"
+                />
+              </label>
+              <p className="text-xs text-gray-500 mt-1">
+                When enabled, Tree View skips layout and uses x/y from the JSON file.
+              </p>
+            </div>
 
             <div className="mt-4 pt-4 border-t border-gray-700">
               <label htmlFor="duplicateTransparency" className="block text-sm font-medium text-gray-300 mb-1">
