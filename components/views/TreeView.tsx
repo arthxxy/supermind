@@ -1250,8 +1250,8 @@ export default function TreeView({
     // Store tree nodes reference
     treeNodesRef.current = allTreeNodes;
 
-    // Restore tree positions if they exist
-    if (savedPositions.tree.size > 0) {
+    // Restore tree positions from in-memory storage only when not using raw JSON coordinates
+    if (!useTreeRawPositions && savedPositions.tree.size > 0) {
       onTreePositionsRestore(allTreeNodes);
     }
 
@@ -1512,6 +1512,8 @@ export default function TreeView({
 
     // Apply initial visual styles for tree mode
     updateTreeVisualStyles(hoveredNodeId, enableHoverEffects, allTreeNodes, linkElements, textElements, nodeElements, duplicateNodeTransparency);
+    // Save rendered Tree View positions so the MindMap can persist them if desired
+    onTreePositionsSave(allTreeNodes);
     
     if (!useTreeRawPositions) {
       // Resolve parent-child crossings with a few local iterations
@@ -1522,7 +1524,7 @@ export default function TreeView({
     // Then update link positions
     updateTreeLinkPositions(allTreeNodes);
 
-  }, [graphData, intraGraphCompactness, interGraphCompactness, enableHoverEffects]);
+  }, [graphData, intraGraphCompactness, interGraphCompactness, enableHoverEffects, useTreeRawPositions]);
 
   // Tree mode hover effects
   useEffect(() => {

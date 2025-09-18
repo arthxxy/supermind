@@ -382,7 +382,20 @@ export default function MindMap({ initialGraphDataFromFolder, initialNodeId, map
 
   // Save mind map to JSON file
   const saveMindMapToFile = () => {
-    const dataStr = JSON.stringify(graphData, null, 2)
+    // Build data snapshot for saving without relying on async setState
+    let dataForSave: GraphData = graphData;
+    if (viewMode === 'tree' && useTreeRawPositions) {
+      const treePositions = viewPositions.tree; // Tree View positions saved by TreeView
+      const nodesWithTreeXY = graphData.nodes.map(n => {
+        const saved = treePositions.get(n.id);
+        if (saved) {
+          return { ...n, x: saved.x, y: saved.y };
+        }
+        return n;
+      });
+      dataForSave = { ...graphData, nodes: nodesWithTreeXY } as GraphData;
+    }
+    const dataStr = JSON.stringify(dataForSave, null, 2)
     const blob = new Blob([dataStr], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
