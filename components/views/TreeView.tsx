@@ -261,13 +261,13 @@ export default function TreeView({
          }
        });
 
-       // Collect parent duplicates directly from nodeMap (they are intentionally isolated)
-       const parentDuplicates: TreeNode[] = [];
-       nodeMap.forEach(treeNode => {
-         if (treeNode.id.includes('_parent_dup_for_')) {
-           parentDuplicates.push(treeNode);
-         }
-       });
+      // Collect parent duplicates directly from nodeMap (only those that actually connect to the child)
+      const parentDuplicates: TreeNode[] = [];
+      nodeMap.forEach(treeNode => {
+        if (treeNode.id.includes('_parent_dup_for_') && treeNode.children.length > 0) {
+          parentDuplicates.push(treeNode);
+        }
+      });
 
       trees.push([...rootNodes, ...friendOnlyNodes, ...parentDuplicates]);
     });
@@ -1168,6 +1168,14 @@ export default function TreeView({
         tn.children.forEach(child => pushNode(child));
       };
       treeComponents.forEach(roots => roots.forEach(root => pushNode(root)));
+      // Reposition parent-duplicate helpers near their child to avoid overlap with original parents
+      treeComponents.forEach(roots => {
+        roots.forEach(root => {
+          if (root.isRoot) {
+            positionParentDuplicates(root, allTreeNodes, LEVEL_DISTANCE);
+          }
+        });
+      });
     } else {
       // Layout each component and keep per-component groups for post-spacing
       const componentGroups: TreeNode[][] = [];
@@ -1263,22 +1271,22 @@ export default function TreeView({
     // Create links based on the actual tree structure we've built
     allTreeNodes.forEach(treeNode => {
       if (treeNode.parent) {
-        // For duplicates, we need to look up the original node ID in graphData.links
+        // Skip child-duplicate nodes: additional parents should not connect directly to original child in Tree View
+        if (treeNode.id.includes('_dup_')) {
+          return;
+        }
         const originalParentId = treeNode.parent.id;
-        const originalChildId = treeNode.id.includes('_dup_') ? treeNode.node.id : treeNode.id;
-        
+        const originalChildId = treeNode.id;
         const originalLink = graphData.links.find(link => {
           const sourceId = typeof link.source === 'string' ? link.source : link.source.id;
           const targetId = typeof link.target === 'string' ? link.target : link.target.id;
-          return (sourceId === originalParentId && targetId === originalChildId);
+          return (link.type === 'parent-child' && sourceId === originalParentId && targetId === originalChildId);
         });
-        
         if (originalLink) {
           linkData.push({
             ...originalLink,
             source: treeNode.parent.node,
             target: treeNode.node,
-            // Store TreeNode IDs for proper positioning
             sourceTreeNodeId: treeNode.parent.id,
             targetTreeNodeId: treeNode.id
           } as any);
