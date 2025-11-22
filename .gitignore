@@ -1,0 +1,56 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# Dependencies
+/node_modules
+/.pnp
+.pnp.js
+
+# Build, Output & Framework-specific
+/.next/
+/out/
+/build
+.turbo
+.vercel
+*.tsbuildinfo
+next-env.d.ts
+
+# Testing
+/coverage
+
+# Log files
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local Environment Variables
+.env.local
+.env.*.local
+
+# IDE / Editor Configuration
+# General IDE/Editor specific files
+/.idea
+/.vs
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+# VSCode specific
+/.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# Git Hooks (Husky)
+.husky/_/husky.sh
+.husky/_/.gitignore
+.husky/_/*
+
+# OS-specific / Miscellaneous
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+*.pem
