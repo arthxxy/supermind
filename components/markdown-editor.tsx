@@ -176,7 +176,6 @@ export function MarkdownEditor({
     }
 
     let html = ''
-    let currentLineIndex = 0
 
     // Content before first heading
     if (headings.length > 0 && headings[0].lineIndex > 0) {
@@ -185,31 +184,55 @@ export function MarkdownEditor({
       if (beforeText) {
         html += `<div class="editable-block before-section" contenteditable="true">${convertMarkdownToHtml(beforeText)}</div>`
       }
-      currentLineIndex = headings[0].lineIndex
     }
 
-    // Process each heading
+    // Process each heading - only top-level ones first
+    // Build a structure that properly nests subsections
     for (let i = 0; i < headings.length; i++) {
       const heading = headings[i]
-      const nextSameLevelOrHigher = headings.slice(i + 1).find(h => h.level <= heading.level)
-      const endLineIndex = nextSameLevelOrHigher ? nextSameLevelOrHigher.lineIndex : lines.length
+      
+      // Skip if this heading is a child of a previous heading (will be rendered as part of parent)
+      let isChild = false
+      for (let j = 0; j < i; j++) {
+        const prevHeading = headings[j]
+        if (heading.level > prevHeading.level) {
+          // Check if there's no same-or-higher level heading between them
+          let foundSameOrHigher = false
+          for (let k = j + 1; k < i; k++) {
+            if (headings[k].level <= prevHeading.level) {
+              foundSameOrHigher = true
+              break
+            }
+          }
+          if (!foundSameOrHigher) {
+            isChild = true
+            break
+          }
+        }
+      }
+      
+      if (isChild) continue // Skip children - they're rendered inside their parent
+      
+      // Find where this section ends (next same/higher level heading)
+      const nextSameLevelOrHigherIdx = headings.findIndex((h, idx) => idx > i && h.level <= heading.level)
+      const endLineIndex = nextSameLevelOrHigherIdx !== -1 ? headings[nextSameLevelOrHigherIdx].lineIndex : lines.length
 
-      // Get content for this section (everything between this heading and the next same/higher level)
+      // Get content for this section
       const sectionContentLines = lines.slice(heading.lineIndex + 1, endLineIndex)
       
-      // Separate own content from subsection headings
+      // Separate own content from subsection content
       const ownContentLines: string[] = []
-      const subsectionStartIndex = sectionContentLines.findIndex(line => {
-        const match = line.match(NUMBERED_HEADING_REGEX)
-        return match !== null
-      })
+      let subsectionIdx = 0
       
-      if (subsectionStartIndex === -1) {
-        // No subsections, all content is own content
-        ownContentLines.push(...sectionContentLines)
-      } else {
-        // Content before first subsection is own content
-        ownContentLines.push(...sectionContentLines.slice(0, subsectionStartIndex))
+      for (let lineIdx = 0; lineIdx < sectionContentLines.length; lineIdx++) {
+        const line = sectionContentLines[lineIdx]
+        const match = line.match(NUMBERED_HEADING_REGEX)
+        if (match) {
+          // Found a subsection - stop collecting own content
+          break
+        }
+        ownContentLines.push(line)
+        subsectionIdx = lineIdx + 1
       }
 
       const id = heading.id
@@ -238,8 +261,6 @@ export function MarkdownEditor({
       // Add editable block AFTER this section for writing outside content
       // This appears at the same level as the section, not inside it
       html += `<div class="editable-block after-section" data-after-heading="${id}" contenteditable="true" style="min-height: 0.5em;"></div>`
-
-      currentLineIndex = endLineIndex
     }
 
     // Final editable area at the end
@@ -402,14 +423,46 @@ export function MarkdownEditor({
 
   // ---------- Toggle heading collapse ----------
 
+  // Find all child headings of a given heading (based on number hierarchy)
+  const getChildHeadingIds = useCallback((headingNumber: string, headings: ParsedHeading[]): string[] => {
+    const childIds: string[] = []
+    const parentNum = headingNumber.replace(/\.$/, '') // Remove trailing dot
+    
+    for (const h of headings) {
+      const hNum = h.number.replace(/\.$/, '')
+      // A child heading starts with parent number followed by a dot
+      if (hNum.startsWith(parentNum + '.')) {
+        childIds.push(h.id)
+      }
+    }
+    
+    return childIds
+  }, [])
+
   const toggleHeadingCollapse = useCallback((headingId: string) => {
+    // Get all headings to find children
+    const headings = parseNumberedHeadings(content)
+    const targetHeading = headings.find(h => h.id === headingId)
+    
     setCollapsedHeadings(prev => {
       const next = new Map(prev)
       const current = next.get(headingId) || false
-      next.set(headingId, !current)
+      const newState = !current
+      
+      // Set the target heading's collapsed state
+      next.set(headingId, newState)
+      
+      // If collapsing, also collapse all children
+      if (newState && targetHeading) {
+        const childIds = getChildHeadingIds(targetHeading.number, headings)
+        for (const childId of childIds) {
+          next.set(childId, true)
+        }
+      }
+      
       return next
     })
-  }, [])
+  }, [content, parseNumberedHeadings, getChildHeadingIds])
 
   // ---------- Event handlers ----------
 
@@ -451,8 +504,11 @@ export function MarkdownEditor({
   // ---------- Create new section/heading ----------
 
   const createSection = useCallback((level: number): void => {
+    if (!contentTextareaRef.current) return
+    
     const selection = window.getSelection()
     const selectedText = selection?.toString().trim() || ''
+    const hasSelection = selectedText.length > 0 && selection && selection.rangeCount > 0
 
     // Prompt for section number
     const existingHeadings = parseNumberedHeadings(content)
@@ -461,21 +517,88 @@ export function MarkdownEditor({
     const sectionNumber = window.prompt('Abschnittsnummer eingeben:', suggestedNumber)
     if (!sectionNumber) return
 
-    const sectionTitle = window.prompt('Abschnittstitel eingeben:', selectedText || 'Neuer Abschnitt')
+    // If text is selected, use it as title (with option to change)
+    // Only ask for title if no text is selected
+    let sectionTitle: string | null
+    if (selectedText) {
+      sectionTitle = window.prompt('Abschnittstitel eingeben:', selectedText)
+    } else {
+      sectionTitle = window.prompt('Abschnittstitel eingeben:', 'Neuer Abschnitt')
+    }
     if (!sectionTitle) return
 
     // Create markdown heading
     const hashes = '#'.repeat(level)
     const headingMarkdown = `${hashes} ${sectionNumber} ${sectionTitle}`
 
-    // Append at end of content
-    const newContent = content + (content.endsWith('\n') ? '' : '\n') + headingMarkdown + '\n'
-    
-    setContent(newContent)
-    onContentChange(newContent)
+    if (hasSelection && selection) {
+      // Replace selected text with the heading IN PLACE
+      const range = selection.getRangeAt(0)
+      
+      // Check if selection is within the editor
+      if (contentTextareaRef.current.contains(range.commonAncestorContainer)) {
+        // Delete the selected text
+        range.deleteContents()
+        
+        // Create a temporary element to hold the heading HTML
+        const id = getHeadingId(sectionNumber)
+        const tagName = `h${level}`
+        
+        // Create the heading structure
+        const sectionDiv = document.createElement('div')
+        sectionDiv.className = 'heading-section'
+        sectionDiv.setAttribute('data-heading-id', id)
+        sectionDiv.setAttribute('data-heading-number', sectionNumber)
+        sectionDiv.setAttribute('data-level', String(level))
+        sectionDiv.setAttribute('data-collapsed', 'false')
+        
+        sectionDiv.innerHTML = `
+          <div class="heading-header" style="display: flex; align-items: center; gap: 0.5rem; padding: 4px 0;">
+            <button type="button" class="heading-toggle" data-heading-id="${id}" style="width: 20px; height: 20px; border: none; background: rgba(255,255,255,0.1); border-radius: 3px; color: inherit; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 0; flex-shrink: 0; font-size: 10px; transition: background 0.2s;">
+              <span class="heading-caret">▼</span>
+            </button>
+            <${tagName} class="heading-title" style="margin: 0; flex: 1; font-weight: 600; display: inline;">
+              <span class="heading-number" style="color: #a78bfa; margin-right: 0.3em;" contenteditable="false">${escapeHtml(sectionNumber)}</span>
+              <span class="heading-text" contenteditable="true">${escapeHtml(sectionTitle)}</span>
+            </${tagName}>
+          </div>
+          <div class="heading-content" data-heading-id="${id}" style="margin-left: 24px; margin-top: 4px; padding-left: 8px; border-left: 2px solid rgba(255,255,255,0.2); display: block;">
+            <div class="section-text editable-block" contenteditable="true"><br></div>
+          </div>
+        `
+        
+        // Insert the heading at cursor position
+        range.insertNode(sectionDiv)
+        
+        // Add an after-section block
+        const afterBlock = document.createElement('div')
+        afterBlock.className = 'editable-block after-section'
+        afterBlock.setAttribute('data-after-heading', id)
+        afterBlock.setAttribute('contenteditable', 'true')
+        afterBlock.style.minHeight = '0.5em'
+        sectionDiv.after(afterBlock)
+        
+        // Sync back to markdown
+        isInternalUpdate.current = true
+        const html = contentTextareaRef.current.innerHTML
+        const markdown = htmlToMarkdown(html)
+        setContent(markdown)
+        onContentChange(markdown)
+      } else {
+        // Selection not in editor, append at end
+        const newContent = content + (content.endsWith('\n') ? '' : '\n') + headingMarkdown + '\n'
+        setContent(newContent)
+        onContentChange(newContent)
+      }
+    } else {
+      // No selection, append at end
+      const newContent = content + (content.endsWith('\n') ? '' : '\n') + headingMarkdown + '\n'
+      setContent(newContent)
+      onContentChange(newContent)
+    }
     
     setShowSectionLevels(false)
-  }, [content, parseNumberedHeadings, onContentChange])
+  }, [content, parseNumberedHeadings, onContentChange, htmlToMarkdown])
 
   // Generate suggested section number based on existing headings
   const generateSectionNumber = (level: number, headings: ParsedHeading[]): string => {
